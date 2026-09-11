@@ -16,6 +16,7 @@ pip install -e ".[dev]"
 cp .env.example .env            # 텔레그램 토큰/챗ID 입력
 cp config.example.yaml config.yaml   # 감시 조건 작성
 
+noti find-region 서울 강남구      # 지역 코드(cortarNo) 찾기
 noti test-notify                # 알림 채널 확인
 noti once --console             # 조회/필터가 잘 되는지 1회 실행 (콘솔 출력)
 noti run                        # 상시 감시
@@ -49,7 +50,36 @@ targets:
 
 - 조건은 **모두 선택 항목**이고, 적은 항목만 AND 로 평가됩니다.
 - 매물에서 값을 못 읽은 항목(예: 방향 정보 없음)은 걸러내지 않고 통과시킵니다 — 놓치는 것보다 낫기 때문.
-- 지역(`kind: region`) 감시에 쓸 법정동 코드는 `noti regions 0000000000` 부터 시/도 → 시군구 → 동 순으로 타고 내려가며 찾습니다.
+### 지역 단위로 감시하기
+
+단지(`kind: complex`)뿐 아니라 **구/동 단위로도 감시**할 수 있습니다.
+
+```bash
+noti find-region 서울 강남구        # 1168000000  서울시 강남구
+noti find-region 서울 강남구 역삼동  # 1168010100  서울시 강남구 역삼동
+noti regions 1168000000            # 강남구 하위 동 전체 나열
+```
+
+```yaml
+  - name: "강남구 전세 10억 이하"
+    kind: region
+    cortar_no: "1168000000"   # 구 코드
+    expand_subregions: true   # 하위 동 전체로 자동 확장 (기본값)
+    max_subregions: 30
+    trade_types: ["B1"]
+    real_estate_types: ["APT", "OPST"]
+    max_pages: 2
+    criteria:
+      max_deposit: 100000
+      min_area_m2: 59
+```
+
+네이버 매물 목록 API 는 **동 단위 코드**를 기대하기 때문에, 구/시 코드를 주면 하위 동 목록을 받아
+동마다 조회합니다(지역 목록은 캐시). 동 코드를 직접 주면 그대로 씁니다.
+
+⚠️ 요청량 주의: 구 하나가 동 20개면 `max_pages: 2` 기준 한 사이클에 40회 호출이 됩니다.
+넓은 지역을 볼수록 `max_pages` 를 줄이고 `NOTI_POLL_INTERVAL_SECONDS` 를 늘리세요
+(구 단위면 10~15분 권장). 조건을 좁게 잡는 것이 알림 품질에도, 사이트에도 낫습니다.
 
 ## 동작 방식
 
@@ -88,7 +118,7 @@ ruff check src tests
 
 | 모듈 | 역할 |
 | --- | --- |
-| `sources/naver.py` | 네이버 API 호출, 토큰 발급/갱신, 페이지네이션 |
+| `sources/naver.py` | 네이버 API 호출, 토큰 발급/갱신, 지역 확장·검색, 페이지네이션 |
 | `models.py` | `Listing` 모델, 가격("11억 5,000")·층수 파서 |
 | `filters.py` | `Criteria` 대비 매칭 |
 | `store.py` | SQLite 중복 제거, 첫 실행 여부 |

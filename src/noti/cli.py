@@ -64,6 +64,22 @@ async def _test_notify(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _find_region(args: argparse.Namespace) -> int:
+    settings = Settings()
+    client = NaverLandClient(timeout=settings.request_timeout_seconds)
+    try:
+        matches = await client.search_regions(" ".join(args.query))
+    finally:
+        await client.aclose()
+
+    if not matches:
+        print("일치하는 지역이 없습니다. '서울 강남구' 처럼 상위 지역부터 띄어서 넣어보세요.")
+        return 1
+    for path, cortar_no in matches:
+        print(f"{cortar_no}\t{path}")
+    return 0
+
+
 async def _regions(args: argparse.Namespace) -> int:
     settings = Settings()
     client = NaverLandClient(timeout=settings.request_timeout_seconds)
@@ -88,8 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("test-notify", help="알림 채널 연결 확인")
     p.add_argument("--console", action="store_true")
 
-    p = sub.add_parser("regions", help="하위 지역 코드 조회 (cortarNo 찾기)")
+    p = sub.add_parser("regions", help="하위 지역 코드 목록")
     p.add_argument("cortar_no", help="상위 지역 코드. 시/도 목록은 0000000000")
+
+    p = sub.add_parser("find-region", help="지역명으로 cortarNo 찾기 (예: 서울 강남구 역삼동)")
+    p.add_argument("query", nargs="+", help="상위 지역부터 띄어쓴 이름")
 
     args = parser.parse_args(argv)
     logging.basicConfig(
@@ -97,7 +116,13 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    handlers = {"run": _run, "once": _run, "test-notify": _test_notify, "regions": _regions}
+    handlers = {
+        "run": _run,
+        "once": _run,
+        "test-notify": _test_notify,
+        "regions": _regions,
+        "find-region": _find_region,
+    }
     return asyncio.run(handlers[args.command](args))
 
 

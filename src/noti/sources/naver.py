@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://new.land.naver.com"
 BOOTSTRAP_URL = f"{BASE_URL}/complexes"
+ROOT_CORTAR_NO = "0000000000"  # 시/도 목록의 부모 코드
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
@@ -45,6 +46,7 @@ class NaverLandClient:
         )
         self._request_delay = request_delay
         self._token: str | None = None
+        self._region_cache: dict[str, list[dict]] = {}
 
     async def __aenter__(self) -> Self:
         return self
@@ -88,35 +90,71 @@ class NaverLandClient:
             raise NaverLandError(f"{path} 응답을 JSON 으로 파싱하지 못했습니다") from exc
 
     async def fetch_listings(self, target: Target) -> list[Listing]:
-        """대상(단지/지역)의 매물을 페이지 단위로 모아서 반환한다."""
+        """대상(단지/지역)의 매물을 모아서 반환한다.
+
+        지역 감시는 구/시 코드를 주면 하위 동으로 펼친 뒤 동별로 조회한다.
+        (네이버 매물 목록 API 는 동 단위 cortarNo 를 기대한다.)
+        """
         listings: list[Listing] = []
         seen: set[str] = set()
+        first_request = True
 
-        for page in range(1, target.max_pages + 1):
-            if page > 1:
-                await asyncio.sleep(self._request_delay)
+        for scope in await self.resolve_scopes(target):
+            for page in range(1, target.max_pages + 1):
+                if not first_request:
+                    await asyncio.sleep(self._request_delay)
+                first_request = False
 
-            payload = await self._fetch_page(target, page)
-            articles = payload.get("articleList") or []
-            for raw in articles:
-                listing = Listing.from_api(raw)
-                if listing.article_no in seen:
-                    continue
-                seen.add(listing.article_no)
-                listings.append(listing)
+                payload = await self._fetch_page(target, scope, page)
+                for raw in payload.get("articleList") or []:
+                    listing = Listing.from_api(raw)
+                    if listing.article_no in seen:
+                        continue
+                    seen.add(listing.article_no)
+                    listings.append(listing)
 
-            if not payload.get("isMoreData"):
-                break
+                if not payload.get("isMoreData"):
+                    break
 
         logger.debug("target=%s 매물 %d건 조회", target.name, len(listings))
         return listings
 
-    async def _fetch_page(self, target: Target, page: int) -> dict:
-        trade_type = ":".join(target.trade_types)
-        real_estate_type = ":".join(target.real_estate_types)
+    async def resolve_scopes(self, target: Target) -> list[str]:
+        """조회 단위 목록. 단지는 complexNo 하나, 지역은 동 코드 목록."""
+        if target.kind == "complex":
+            assert target.complex_no
+            return [target.complex_no]
+
+        assert target.cortar_no
+        if not target.expand_subregions:
+            return [target.cortar_no]
+
+        children = await self._subregions(target.cortar_no)
+        if not children:  # 이미 동 단위라 하위 지역이 없다
+            return [target.cortar_no]
+
+        codes = [str(region["cortarNo"]) for region in children if region.get("cortarNo")]
+        if len(codes) > target.max_subregions:
+            logger.warning(
+                "target=%s 하위 지역이 %d개라 앞에서 %d개만 감시합니다",
+                target.name,
+                len(codes),
+                target.max_subregions,
+            )
+            codes = codes[: target.max_subregions]
+        logger.info("target=%s 지역 %d개로 펼침", target.name, len(codes))
+        return codes
+
+    async def _subregions(self, cortar_no: str) -> list[dict]:
+        """하위 지역 목록(캐시). 같은 사이클에서 반복 호출해도 요청은 한 번."""
+        if cortar_no not in self._region_cache:
+            self._region_cache[cortar_no] = await self.fetch_regions(cortar_no)
+        return self._region_cache[cortar_no]
+
+    async def _fetch_page(self, target: Target, scope: str, page: int) -> dict:
         params: dict[str, str | int] = {
-            "realEstateType": real_estate_type,
-            "tradeType": trade_type,
+            "realEstateType": ":".join(target.real_estate_types),
+            "tradeType": ":".join(target.trade_types),
             "page": page,
             "order": "rank",
             "priceType": "RETAIL",
@@ -124,13 +162,33 @@ class NaverLandClient:
         }
 
         if target.kind == "complex":
-            assert target.complex_no
-            params["complexNo"] = target.complex_no
-            return await self._get_json(f"/api/articles/complex/{target.complex_no}", params)
+            params["complexNo"] = scope
+            return await self._get_json(f"/api/articles/complex/{scope}", params)
 
-        assert target.cortar_no
-        params["cortarNo"] = target.cortar_no
+        params["cortarNo"] = scope
         return await self._get_json("/api/articles", params)
+
+    async def search_regions(self, query: str) -> list[tuple[str, str]]:
+        """'서울 강남구 역삼동' 처럼 띄어쓴 이름으로 지역 코드를 찾는다.
+
+        토큰을 하나씩 따라 트리를 내려가며 부분일치로 후보를 좁힌다.
+        반환값은 (전체 경로 이름, cortarNo) 목록.
+        """
+        frontier: list[tuple[str, str]] = [("", ROOT_CORTAR_NO)]
+
+        for token in query.split():
+            matches: list[tuple[str, str]] = []
+            for path, code in frontier:
+                for region in await self._subregions(code):
+                    name = str(region.get("cortarName") or "")
+                    if token in name:
+                        full = f"{path} {name}".strip()
+                        matches.append((full, str(region["cortarNo"])))
+            if not matches:
+                return []
+            frontier = matches
+
+        return frontier
 
     async def fetch_regions(self, cortar_no: str) -> list[dict]:
         """하위 지역(법정동) 목록. cortar_no 를 찾을 때 쓰는 헬퍼."""

@@ -33,7 +33,10 @@ class Target(BaseModel):
     name: str
     kind: Literal["complex", "region"] = "complex"
     complex_no: str | None = None  # kind=complex 일 때 필수
-    cortar_no: str | None = None  # kind=region 일 때 필수 (법정동 코드 10자리)
+    cortar_no: str | None = None  # kind=region 일 때 필수 (지역 코드 10자리)
+    # 구/시 코드를 주면 하위 동을 자동으로 펼쳐 전부 감시한다(동 코드를 주면 그대로 사용).
+    expand_subregions: bool = True
+    max_subregions: int = 30  # 펼친 하위 지역 수 상한(요청 폭주 방지)
     trade_types: list[str] = Field(default_factory=lambda: ["A1"])  # A1 매매 B1 전세 B2 월세
     real_estate_types: list[str] = Field(default_factory=lambda: ["APT"])
     max_pages: int = 3

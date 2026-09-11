@@ -18,15 +18,27 @@ targets:
       directions: ["남향", "남동향", "남서향"]
       exclude_keywords: ["단기", "반전세"]
 
-  # 2) 동 단위 지역 월세 감시
+  # 2) 구 단위 지역 감시 (하위 동을 자동으로 펼쳐서 전부 훑음)
+  - name: "강남구 전세 10억 이하"
+    kind: region
+    cortar_no: "1168000000"      # `noti find-region 서울 강남구` 로 확인
+    expand_subregions: true      # 구/시 코드 → 하위 동 전체 (기본값 true)
+    max_subregions: 30           # 동이 너무 많을 때 상한
+    trade_types: ["B1"]
+    real_estate_types: ["APT", "OPST"]
+    max_pages: 2                 # 동마다 최대 2페이지
+    criteria:
+      max_deposit: 100000
+      min_area_m2: 59
+
+  # 3) 동 하나만 콕 집어 월세 감시
   - name: "역삼동 오피스텔 월세"
     kind: region
-    cortar_no: "1168010100"      # `noti regions 0000000000` 부터 타고 내려가며 확인
+    cortar_no: "1168010100"      # 동 코드를 주면 그대로 사용
     trade_types: ["B2"]
-    real_estate_types: ["OPST", "APT"]
+    real_estate_types: ["OPST"]
     max_pages: 2
     criteria:
       max_deposit: 5000
       max_monthly: 120
       min_area_m2: 33
-      include_keywords: []       # 비우면 키워드 조건 없음
