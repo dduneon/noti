@@ -1,0 +1,145 @@
+"""매물 도메인 모델과 가격/층수 파서."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+# 네이버가 쓰는 거래 유형 코드
+TRADE_TYPE_NAMES = {"A1": "매매", "B1": "전세", "B2": "월세", "B3": "단기임대"}
+
+
+def parse_price(text: str | None) -> tuple[int | None, int | None]:
+    """가격 문자열을 (보증금, 월세) 만원 단위 정수로 변환한다.
+
+    >>> parse_price("11억 5,000")
+    (115000, None)
+    >>> parse_price("5억")
+    (50000, None)
+    >>> parse_price("1,000/70")
+    (1000, 70)
+    """
+    if not text:
+        return None, None
+
+    deposit_text, _, monthly_text = text.partition("/")
+    deposit = _parse_amount(deposit_text)
+    monthly = _parse_amount(monthly_text) if monthly_text else None
+    return deposit, monthly
+
+
+def _parse_amount(text: str) -> int | None:
+    """'11억 5,000' / '9,500' / '3억5천' 형태를 만원 단위 정수로."""
+    cleaned = text.replace(",", "").replace(" ", "").strip()
+    if not cleaned:
+        return None
+
+    match = re.fullmatch(r"(?:(\d+)억)?(?:(\d+)천)?(\d+)?", cleaned)
+    if not match or not any(match.groups()):
+        return None
+
+    eok, chun, rest = match.groups()
+    total = 0
+    if eok:
+        total += int(eok) * 10_000
+    if chun:
+        total += int(chun) * 1_000
+    if rest:
+        total += int(rest)
+    return total or None
+
+
+def parse_floor(floor_info: str | None) -> tuple[int | None, int | None]:
+    """'12/25' -> (12, 25). '고/25' 처럼 숫자가 아니면 해당 값은 None."""
+    if not floor_info:
+        return None, None
+
+    current_text, _, total_text = floor_info.partition("/")
+    return _maybe_int(current_text), _maybe_int(total_text)
+
+
+def _maybe_int(text: str) -> int | None:
+    text = text.strip()
+    return int(text) if text.lstrip("-").isdigit() else None
+
+
+@dataclass(slots=True)
+class Listing:
+    """네이버 부동산 매물 한 건."""
+
+    article_no: str
+    name: str
+    trade_type: str
+    price_text: str
+    deposit: int | None = None  # 만원. 매매면 매매가, 전/월세면 보증금
+    monthly: int | None = None  # 만원. 월세만
+    area_m2: float | None = None  # 전용면적
+    supply_area_m2: float | None = None  # 공급면적
+    area_name: str | None = None  # "84A" 같은 평형 이름
+    floor: int | None = None
+    total_floor: int | None = None
+    direction: str | None = None
+    building_name: str | None = None
+    realtor: str | None = None
+    confirm_date: str | None = None
+    feature_desc: str | None = None
+    tags: list[str] = field(default_factory=list)
+    complex_no: str | None = None
+
+    @property
+    def url(self) -> str:
+        return f"https://new.land.naver.com/articles/{self.article_no}"
+
+    @property
+    def searchable_text(self) -> str:
+        """키워드 필터가 훑는 텍스트."""
+        parts = [self.name, self.building_name, self.feature_desc, *self.tags]
+        return " ".join(p for p in parts if p)
+
+    def summary(self) -> str:
+        bits = [f"{self.trade_type} {self.price_text}"]
+        if self.area_m2:
+            bits.append(f"전용 {self.area_m2:g}㎡({self.area_m2 / 3.3058:.0f}평)")
+        if self.floor is not None:
+            bits.append(f"{self.floor}/{self.total_floor or '?'}층")
+        if self.direction:
+            bits.append(self.direction)
+        return " · ".join(bits)
+
+    @classmethod
+    def from_api(cls, raw: dict) -> Listing:
+        """네이버 articles API 응답 1건을 Listing 으로."""
+        price_text = raw.get("dealOrWarrantPrc") or ""
+        deposit, monthly = parse_price(price_text)
+        # 월세는 rentPrc 에 따로 오는 경우가 있다.
+        if monthly is None and raw.get("rentPrc"):
+            _, monthly = parse_price(f"0/{raw['rentPrc']}")
+        floor, total_floor = parse_floor(raw.get("floorInfo"))
+
+        return cls(
+            article_no=str(raw.get("articleNo")),
+            name=raw.get("articleName") or raw.get("buildingName") or "이름 없음",
+            trade_type=raw.get("tradeTypeName") or TRADE_TYPE_NAMES.get(raw.get("tradeType", ""), "?"),
+            price_text=price_text,
+            deposit=deposit,
+            monthly=monthly,
+            area_m2=_maybe_float(raw.get("area2")),
+            supply_area_m2=_maybe_float(raw.get("area1")),
+            area_name=raw.get("areaName"),
+            floor=floor,
+            total_floor=total_floor,
+            direction=raw.get("direction"),
+            building_name=raw.get("buildingName"),
+            realtor=raw.get("realtorName"),
+            confirm_date=raw.get("articleConfirmYmd"),
+            feature_desc=raw.get("articleFeatureDesc"),
+            tags=list(raw.get("tagList") or []),
+            complex_no=str(raw["complexNo"]) if raw.get("complexNo") else None,
+        )
+
+
+def _maybe_float(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None

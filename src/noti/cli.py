@@ -1,0 +1,105 @@
+"""CLI 엔트리포인트: noti run / once / test-notify / regions."""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import sys
+
+from .config import Settings, WatchConfig
+from .notifiers import ConsoleNotifier, Notifier, TelegramNotifier
+from .service import MonitorService
+from .sources import NaverLandClient
+
+
+def build_notifier(settings: Settings, *, force_console: bool = False) -> Notifier:
+    if force_console or not settings.telegram_enabled:
+        if not force_console:
+            print("텔레그램 설정이 없어 콘솔로 출력합니다.", file=sys.stderr)
+        return ConsoleNotifier()
+    assert settings.telegram_bot_token and settings.telegram_chat_id
+    return TelegramNotifier(
+        settings.telegram_bot_token,
+        settings.telegram_chat_id,
+        timeout=settings.request_timeout_seconds,
+    )
+
+
+async def _run(args: argparse.Namespace) -> int:
+    settings = Settings()
+    config = WatchConfig.load(args.config or settings.config_path)
+    notifier = build_notifier(settings, force_console=args.console)
+
+    client = NaverLandClient(
+        timeout=settings.request_timeout_seconds,
+        request_delay=settings.request_delay_seconds,
+    )
+    store = None
+    try:
+        from .store import Store
+
+        store = Store(settings.db_path)
+        service = MonitorService(settings, config, client, store, notifier)
+        if args.command == "once":
+            sent = await service.run_once()
+            print(f"이번 실행에서 알린 매물: {len(sent)}건")
+        else:
+            await service.run_forever()
+    finally:
+        await client.aclose()
+        await notifier.aclose()
+        if store is not None:
+            store.close()
+    return 0
+
+
+async def _test_notify(args: argparse.Namespace) -> int:
+    settings = Settings()
+    notifier = build_notifier(settings, force_console=args.console)
+    try:
+        await notifier.send_text("✅ noti 알림 테스트입니다.")
+    finally:
+        await notifier.aclose()
+    return 0
+
+
+async def _regions(args: argparse.Namespace) -> int:
+    settings = Settings()
+    client = NaverLandClient(timeout=settings.request_timeout_seconds)
+    try:
+        for region in await client.fetch_regions(args.cortar_no):
+            print(f"{region.get('cortarNo')}\t{region.get('cortarName')}")
+    finally:
+        await client.aclose()
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="noti", description="네이버 부동산 매물 알림 봇")
+    parser.add_argument("--log-level", default="INFO")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    for name, help_text in (("run", "주기적으로 감시"), ("once", "한 번만 실행")):
+        p = sub.add_parser(name, help=help_text)
+        p.add_argument("--config", help="감시 조건 YAML 경로")
+        p.add_argument("--console", action="store_true", help="텔레그램 대신 콘솔 출력")
+
+    p = sub.add_parser("test-notify", help="알림 채널 연결 확인")
+    p.add_argument("--console", action="store_true")
+
+    p = sub.add_parser("regions", help="하위 지역 코드 조회 (cortarNo 찾기)")
+    p.add_argument("cortar_no", help="상위 지역 코드. 시/도 목록은 0000000000")
+
+    args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=args.log_level.upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    handlers = {"run": _run, "once": _run, "test-notify": _test_notify, "regions": _regions}
+    return asyncio.run(handlers[args.command](args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

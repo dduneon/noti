@@ -1,0 +1,102 @@
+"""폴링 루프: 조회 → 조건 필터 → 중복 제거 → 알림."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+
+import httpx
+
+from .config import Settings, Target, WatchConfig
+from .filters import matches
+from .models import Listing
+from .notifiers import Notifier
+from .sources import NaverLandClient, NaverLandError
+from .store import Store
+
+logger = logging.getLogger(__name__)
+
+
+class MonitorService:
+    def __init__(
+        self,
+        settings: Settings,
+        config: WatchConfig,
+        client: NaverLandClient,
+        store: Store,
+        notifier: Notifier,
+    ) -> None:
+        self._settings = settings
+        self._config = config
+        self._client = client
+        self._store = store
+        self._notifier = notifier
+
+    async def run_forever(self) -> None:
+        logger.info(
+            "감시 시작: 대상 %d개, 주기 %d초",
+            len(self._config.targets),
+            self._settings.poll_interval_seconds,
+        )
+        while True:
+            try:
+                await self.run_once()
+            except Exception:  # 한 사이클이 실패해도 루프는 계속
+                logger.exception("사이클 실행 중 오류")
+
+            delay = self._settings.poll_interval_seconds + random.uniform(
+                0, self._settings.jitter_seconds
+            )
+            await asyncio.sleep(delay)
+
+    async def run_once(self) -> list[Listing]:
+        """전체 대상을 한 번 돌고, 이번에 알린 매물을 반환한다."""
+        notified: list[Listing] = []
+
+        for index, target in enumerate(self._config.targets):
+            if index > 0:
+                await asyncio.sleep(self._settings.request_delay_seconds)
+            try:
+                notified.extend(await self._process_target(target))
+            except (NaverLandError, httpx.HTTPError, OSError) as exc:
+                logger.warning("target=%s 조회 실패: %s", target.name, exc)
+            except Exception:
+                logger.exception("target=%s 처리 실패", target.name)
+
+        return notified
+
+    async def _process_target(self, target: Target) -> list[Listing]:
+        listings = await self._client.fetch_listings(target)
+        matched = [listing for listing in listings if matches(listing, target.criteria)]
+        fresh = self._store.filter_new(target.name, matched)
+
+        # 첫 실행에는 기존 매물이 전부 '새 매물'이라 알림 폭탄이 된다.
+        first_run = not self._store.is_bootstrapped(target.name)
+        should_notify = not first_run or self._config.notify_on_first_run
+
+        logger.info(
+            "target=%s 조회 %d건 / 조건일치 %d건 / 신규 %d건%s",
+            target.name,
+            len(listings),
+            len(matched),
+            len(fresh),
+            "" if should_notify else " (첫 실행이라 알림 생략)",
+        )
+
+        sent: list[Listing] = []
+        if should_notify:
+            limit = self._settings.max_notifications_per_cycle
+            for listing in fresh[:limit]:
+                await self._notifier.send(target.name, listing)
+                sent.append(listing)
+            if len(fresh) > limit:
+                await self._notifier.send_text(
+                    f"[{target.name}] 조건에 맞는 신규 매물이 {len(fresh)}건이라 "
+                    f"{limit}건만 보냈습니다."
+                )
+
+        # 알림을 생략했어도 본 매물은 기록해 둔다(다음 사이클부터 진짜 신규만 알림).
+        self._store.remember(target.name, matched)
+        self._store.mark_bootstrapped(target.name)
+        return sent
