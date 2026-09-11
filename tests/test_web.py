@@ -1,0 +1,133 @@
+import pytest
+from fastapi.testclient import TestClient
+
+from noti.config import Settings, WatchConfig
+from noti.web import create_app
+
+REGION_TREE = {
+    "0000000000": [{"cortarNo": "1100000000", "cortarName": "서울시"}],
+    "1100000000": [{"cortarNo": "1168000000", "cortarName": "강남구"}],
+    "1168000000": [{"cortarNo": "1168010100", "cortarName": "역삼동"}],
+    "1168010100": [],
+}
+
+ARTICLES = [
+    {
+        "articleNo": "1",
+        "articleName": "○○아파트",
+        "tradeTypeName": "전세",
+        "dealOrWarrantPrc": "8억",
+        "area2": 84.9,
+        "floorInfo": "7/15",
+    },
+    {
+        "articleNo": "2",
+        "articleName": "△△아파트",
+        "tradeTypeName": "전세",
+        "dealOrWarrantPrc": "15억",
+        "area2": 114.0,
+        "floorInfo": "3/15",
+    },
+]
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    settings = Settings(
+        config_path=tmp_path / "config.yaml",
+        db_path=tmp_path / "noti.db",
+        telegram_bot_token=None,
+        telegram_chat_id=None,
+    )
+    WatchConfig(targets=[]).save(settings.config_path)
+    app = create_app(settings)
+
+    with TestClient(app) as test_client:
+        async def fake_get_json(path, params):
+            if path == "/api/regions/list":
+                return {"regionList": REGION_TREE.get(str(params["cortarNo"]), [])}
+            return {"articleList": ARTICLES, "isMoreData": False}
+
+        monkeypatch.setattr(app.state.client, "_get_json", fake_get_json)
+        test_client.settings = settings
+        yield test_client
+
+
+def region_target(**overrides):
+    target = {
+        "name": "강남구 전세",
+        "kind": "region",
+        "cortar_no": "1168000000",
+        "trade_types": ["B1"],
+        "real_estate_types": ["APT"],
+        "max_pages": 1,
+        "criteria": {"max_deposit": 100000},
+    }
+    target.update(overrides)
+    return target
+
+
+def test_read_empty_config(client):
+    body = client.get("/api/config").json()
+    assert body["targets"] == []
+    assert body["notify_on_first_run"] is False
+
+
+def test_save_and_reload_config(client):
+    payload = {"notify_on_first_run": True, "targets": [region_target()]}
+    response = client.put("/api/config", json=payload)
+    assert response.status_code == 200
+    assert response.json() == {"saved": True, "targets": 1}
+
+    # 파일로 저장되고, 다시 읽으면 같은 내용
+    saved = WatchConfig.load(client.settings.config_path)
+    assert saved.notify_on_first_run is True
+    assert saved.targets[0].cortar_no == "1168000000"
+    assert client.get("/api/config").json()["targets"][0]["name"] == "강남구 전세"
+
+
+def test_save_rejects_invalid_target(client):
+    payload = {"targets": [region_target(kind="complex", complex_no=None, cortar_no=None)]}
+    assert client.put("/api/config", json=payload).status_code == 422
+    # 잘못된 저장 시도로 기존 파일이 망가지지 않는다
+    assert WatchConfig.load(client.settings.config_path).targets == []
+
+
+def test_save_backs_up_previous_file(client):
+    client.put("/api/config", json={"targets": [region_target(name="첫번째")]})
+    client.put("/api/config", json={"targets": [region_target(name="두번째")]})
+
+    backup = client.settings.config_path.with_suffix(".yaml.bak")
+    assert "첫번째" in backup.read_text(encoding="utf-8")
+
+
+def test_region_search(client):
+    results = client.get("/api/regions/search", params={"q": "서울 강남구"}).json()
+    assert results == [{"cortar_no": "1168000000", "path": "서울시 강남구"}]
+    assert client.get("/api/regions/search", params={"q": "  "}).json() == []
+
+
+def test_region_children(client):
+    results = client.get("/api/regions/children", params={"cortar_no": "1168000000"}).json()
+    assert results == [{"cortar_no": "1168010100", "name": "역삼동"}]
+
+
+def test_preview_applies_criteria(client):
+    body = client.post("/api/preview", json={"target": region_target()}).json()
+    assert body["scopes"] == 1  # 강남구 → 역삼동 1곳
+    assert body["fetched"] == 2
+    assert body["matched"] == 1  # 15억짜리는 조건에서 탈락
+    assert body["listings"][0]["name"] == "○○아파트"
+    assert body["listings"][0]["url"].endswith("/articles/1")
+
+
+def test_test_notify_without_telegram(client):
+    response = client.post("/api/test-notify")
+    assert response.status_code == 400
+    assert "텔레그램" in response.json()["detail"]
+
+
+def test_index_page_served(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "noti 설정" in response.text

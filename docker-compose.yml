@@ -4,7 +4,19 @@ services:
     restart: unless-stopped
     env_file: .env
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml
+      - noti-data:/data
+
+  # 설정 페이지. 인증이 없으므로 호스트 루프백에만 노출한다.
+  noti-web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["noti", "web", "--host", "0.0.0.0", "--port", "8765"]
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./config.yaml:/app/config.yaml
       - noti-data:/data
 
 volumes:

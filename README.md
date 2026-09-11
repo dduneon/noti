@@ -11,12 +11,12 @@
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[web]"        # 설정 페이지 없이 CLI 만 쓸 거면 pip install -e .
 
 cp .env.example .env            # 텔레그램 토큰/챗ID 입력
 cp config.example.yaml config.yaml   # 감시 조건 작성
 
-noti find-region 서울 강남구      # 지역 코드(cortarNo) 찾기
+noti web                        # 설정 페이지 → http://127.0.0.1:8765
 noti test-notify                # 알림 채널 확인
 noti once --console             # 조회/필터가 잘 되는지 1회 실행 (콘솔 출력)
 noti run                        # 상시 감시
@@ -28,7 +28,27 @@ noti run                        # 상시 감시
 2. 만든 봇과 대화를 한 번 시작(`/start`)하고, **@userinfobot** 으로 내 chat id 확인 → `NOTI_TELEGRAM_CHAT_ID`
    (그룹으로 받을 땐 봇을 그룹에 넣고 그룹 chat id(음수)를 사용)
 
+## 설정 페이지 (권장)
+
+```bash
+noti web            # http://127.0.0.1:8765
+```
+
+브라우저에서 감시 대상을 만들고 조건을 채웁니다. YAML 을 직접 쓰지 않아도 됩니다.
+
+- **지역 찾기**: `서울 강남구 역삼동` 처럼 입력 → 후보를 클릭하면 `cortarNo` 가 자동으로 채워집니다.
+- **거래 유형 / 매물 종류 / 방향**은 칩으로 선택, 금액은 만원 단위로 넣으면 `10억` 처럼 환산해 보여줍니다.
+- **미리보기**: 저장 전에 "이 조건으로 미리보기" 를 누르면 지금 조건에 몇 건이 걸리는지 실제로 조회해 보여줍니다(알림은 안 나감).
+- **알림 테스트** 버튼으로 텔레그램 연결을 확인합니다.
+- 저장하면 `config.yaml` 에 쓰이고(이전 파일은 `.bak` 로 백업), **실행 중인 `noti run` 이 다음 사이클에 자동으로 새 설정을 반영**합니다. 재시작 불필요.
+
+> ⚠️ 설정 페이지에는 로그인이 없습니다. 기본값인 `127.0.0.1` 바인딩을 유지하고 외부에 열지 마세요.
+> 원격에서 쓰려면 SSH 터널(`ssh -L 8765:127.0.0.1:8765 ...`)을 권합니다.
+> 저장 시 YAML 주석은 보존되지 않습니다.
+
 ## 감시 조건 작성 (config.yaml)
+
+설정 페이지 대신 파일을 직접 편집해도 됩니다.
 
 ```yaml
 notify_on_first_run: false   # 첫 실행에 기존 매물 전부 알릴지 (보통 false)
@@ -91,9 +111,12 @@ noti regions 1168000000            # 강남구 하위 동 전체 나열
 ## 상시 실행
 
 ```bash
-docker compose up -d --build     # .env + config.yaml 을 마운트
+docker compose up -d --build     # 감시 루프 + 설정 페이지(127.0.0.1:8765)
 docker compose logs -f
 ```
+
+compose 는 컨테이너 두 개를 띄웁니다: 감시 루프(`noti run`)와 설정 페이지(`noti web`).
+둘은 같은 `config.yaml` 을 공유하고, 페이지에서 저장하면 루프가 다음 사이클에 반영합니다.
 
 systemd 를 쓴다면 `ExecStart=/opt/noti/.venv/bin/noti run` 에 `Restart=always` 정도면 충분합니다.
 
@@ -123,4 +146,5 @@ ruff check src tests
 | `filters.py` | `Criteria` 대비 매칭 |
 | `store.py` | SQLite 중복 제거, 첫 실행 여부 |
 | `notifiers.py` | 텔레그램 / 콘솔 전송 |
-| `service.py` | 폴링 루프 |
+| `service.py` | 폴링 루프, 설정 파일 변경 감지 |
+| `web.py` + `static/` | 설정 페이지(FastAPI + 바닐라 JS) |

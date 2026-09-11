@@ -32,6 +32,28 @@ class MonitorService:
         self._client = client
         self._store = store
         self._notifier = notifier
+        self._config_mtime: float | None = None
+
+    def _reload_config_if_changed(self) -> None:
+        """설정 페이지에서 저장한 내용을 재시작 없이 반영한다."""
+        path = self._settings.config_path
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if self._config_mtime is None:
+            self._config_mtime = mtime
+            return
+        if mtime == self._config_mtime:
+            return
+
+        try:
+            self._config = WatchConfig.load(path)
+        except Exception:
+            logger.exception("바뀐 설정을 읽지 못해 이전 설정을 유지합니다: %s", path)
+        else:
+            logger.info("설정을 다시 읽었습니다: 대상 %d개", len(self._config.targets))
+        self._config_mtime = mtime
 
     async def run_forever(self) -> None:
         logger.info(
@@ -52,6 +74,7 @@ class MonitorService:
 
     async def run_once(self) -> list[Listing]:
         """전체 대상을 한 번 돌고, 이번에 알린 매물을 반환한다."""
+        self._reload_config_if_changed()
         notified: list[Listing] = []
 
         for index, target in enumerate(self._config.targets):

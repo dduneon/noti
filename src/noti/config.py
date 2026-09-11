@@ -60,6 +60,27 @@ class WatchConfig(BaseModel):
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         return cls.model_validate(data)
 
+    def save(self, path: str | Path) -> None:
+        """설정 페이지에서 저장할 때 쓰는 원자적 쓰기.
+
+        기존 파일은 .bak 으로 한 벌 남긴다. YAML 주석은 보존되지 않는다.
+        """
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.with_suffix(target.suffix + ".bak").write_text(
+                target.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(self.to_yaml(), encoding="utf-8")
+        tmp.replace(target)
+
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(
+            self.model_dump(mode="json"), allow_unicode=True, sort_keys=False, indent=2
+        )
+
 
 class Settings(BaseSettings):
     """.env / 환경변수에서 읽는 런타임 설정."""

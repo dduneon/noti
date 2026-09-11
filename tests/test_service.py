@@ -96,3 +96,46 @@ async def test_cycle_limit(tmp_path):
     assert len(notifier.sent) == 20
     assert notifier.texts and "30건" in notifier.texts[0]
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_config_is_reloaded_when_file_changes(tmp_path):
+    """설정 페이지에서 저장하면 재시작 없이 다음 사이클에 반영된다."""
+    from noti.config import WatchConfig
+
+    config_path = tmp_path / "config.yaml"
+    service, client, store, _notifier = build(tmp_path, [make("1")], notify_on_first_run=True)
+    service._settings.config_path = config_path
+
+    WatchConfig(notify_on_first_run=True, targets=[]).save(config_path)
+    await service.run_once()  # mtime 기준점만 잡는다
+    assert client.calls == 1
+
+    new_target = Target(name="바뀐대상", kind="region", cortar_no="1168010100")
+    WatchConfig(notify_on_first_run=True, targets=[new_target]).save(config_path)
+    import os
+
+    os.utime(config_path, (0, 0))  # mtime 을 확실히 다르게
+    await service.run_once()
+
+    assert [t.name for t in service._config.targets] == ["바뀐대상"]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_broken_config_keeps_previous(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    service, _client, store, _notifier = build(tmp_path, [make("1")])
+    service._settings.config_path = config_path
+
+    config_path.write_text("targets: []\n", encoding="utf-8")
+    await service.run_once()
+
+    config_path.write_text("targets: [{kind: region}]\n", encoding="utf-8")  # name 없음 → 검증 실패
+    import os
+
+    os.utime(config_path, (0, 0))
+    await service.run_once()
+
+    assert [t.name for t in service._config.targets] == ["테스트"]  # 이전 설정 유지
+    store.close()

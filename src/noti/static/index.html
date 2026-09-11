@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>noti 설정</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>🏠 noti 설정</h1>
+    <div id="runtime" class="runtime"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="bar">
+    <label class="switch">
+      <input type="checkbox" id="notifyFirstRun">
+      <span>첫 실행에 기존 매물도 알림</span>
+    </label>
+    <div class="bar-actions">
+      <button id="testNotify" class="ghost">알림 테스트</button>
+      <button id="addTarget" class="ghost">+ 감시 대상 추가</button>
+      <button id="save" class="primary">저장</button>
+    </div>
+  </section>
+
+  <div id="targets"></div>
+  <p id="empty" class="empty" hidden>감시 대상이 없습니다. <b>+ 감시 대상 추가</b>로 시작하세요.</p>
+</main>
+
+<div id="toast" class="toast" hidden></div>
+
+<template id="targetTpl">
+  <section class="card" data-target>
+    <div class="card-head">
+      <input class="title" data-field="name" placeholder="감시 대상 이름 (예: 강남구 전세 10억 이하)">
+      <button class="ghost danger" data-action="remove">삭제</button>
+    </div>
+
+    <div class="grid">
+      <label class="field">
+        <span>감시 종류</span>
+        <select data-field="kind">
+          <option value="region">지역 (구/동)</option>
+          <option value="complex">단지 (아파트 하나)</option>
+        </select>
+      </label>
+
+      <label class="field" data-only="complex">
+        <span>단지 번호 (complexNo)</span>
+        <input data-field="complex_no" placeholder="new.land.naver.com/complexes/111515 의 숫자">
+      </label>
+
+      <div class="field region-search" data-only="region">
+        <span>지역 찾기</span>
+        <div class="row">
+          <input data-region-query placeholder="예: 서울 강남구 역삼동" autocomplete="off">
+          <button class="ghost" data-action="search-region">검색</button>
+        </div>
+        <ul class="results" data-region-results hidden></ul>
+        <p class="chosen" data-region-chosen></p>
+      </div>
+
+      <label class="field" data-only="region">
+        <span>지역 코드 (cortarNo)</span>
+        <input data-field="cortar_no" placeholder="검색으로 채워집니다">
+      </label>
+
+      <label class="field checkbox" data-only="region">
+        <input type="checkbox" data-field="expand_subregions">
+        <span>구/시 코드면 하위 동 전체로 확장</span>
+      </label>
+
+      <label class="field" data-only="region">
+        <span>확장 상한 (동 개수)</span>
+        <input type="number" min="1" data-field="max_subregions">
+      </label>
+
+      <fieldset class="field span2">
+        <span>거래 유형</span>
+        <div class="chips" data-field="trade_types"></div>
+      </fieldset>
+
+      <fieldset class="field span2">
+        <span>매물 종류</span>
+        <div class="chips" data-field="real_estate_types"></div>
+      </fieldset>
+
+      <label class="field">
+        <span>조회 페이지 수</span>
+        <input type="number" min="1" max="10" data-field="max_pages">
+      </label>
+    </div>
+
+    <h3>조건 <small>비워두면 조건 없음 · 금액은 만원 단위</small></h3>
+    <div class="grid">
+      <label class="field">
+        <span>보증금/매매가 최소</span>
+        <input type="number" data-criteria="min_deposit" placeholder="예: 50000">
+        <em data-hint></em>
+      </label>
+      <label class="field">
+        <span>보증금/매매가 최대</span>
+        <input type="number" data-criteria="max_deposit" placeholder="예: 90000 (9억)">
+        <em data-hint></em>
+      </label>
+      <label class="field">
+        <span>월세 최소</span>
+        <input type="number" data-criteria="min_monthly">
+      </label>
+      <label class="field">
+        <span>월세 최대</span>
+        <input type="number" data-criteria="max_monthly">
+      </label>
+      <label class="field">
+        <span>전용면적 최소 (㎡)</span>
+        <input type="number" step="0.1" data-criteria="min_area_m2">
+        <em data-hint></em>
+      </label>
+      <label class="field">
+        <span>전용면적 최대 (㎡)</span>
+        <input type="number" step="0.1" data-criteria="max_area_m2">
+        <em data-hint></em>
+      </label>
+      <label class="field">
+        <span>층 최소</span>
+        <input type="number" data-criteria="min_floor">
+      </label>
+      <label class="field">
+        <span>층 최대</span>
+        <input type="number" data-criteria="max_floor">
+      </label>
+      <label class="field checkbox">
+        <input type="checkbox" data-criteria="exclude_first_floor">
+        <span>1층 제외</span>
+      </label>
+      <fieldset class="field span2">
+        <span>방향</span>
+        <div class="chips" data-criteria="directions"></div>
+      </fieldset>
+      <label class="field span2">
+        <span>포함 키워드 <small>하나라도 있으면 통과 · 쉼표로 구분</small></span>
+        <input data-criteria-list="include_keywords" placeholder="올수리, 급매">
+      </label>
+      <label class="field span2">
+        <span>제외 키워드 <small>하나라도 있으면 탈락</small></span>
+        <input data-criteria-list="exclude_keywords" placeholder="단기, 반전세">
+      </label>
+    </div>
+
+    <div class="card-foot">
+      <button class="ghost" data-action="preview">이 조건으로 미리보기</button>
+      <span class="preview-status" data-preview-status></span>
+    </div>
+    <ul class="listings" data-preview-results hidden></ul>
+  </section>
+</template>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

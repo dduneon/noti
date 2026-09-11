@@ -64,6 +64,25 @@ async def _test_notify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _web(args: argparse.Namespace) -> int:
+    """설정 페이지 서버. fastapi/uvicorn 은 선택 의존성이라 여기서 import 한다."""
+    try:
+        import uvicorn
+
+        from .web import create_app
+    except ImportError:
+        print(
+            "설정 페이지를 쓰려면 웹 의존성이 필요합니다: pip install -e '.[web]'",
+            file=sys.stderr,
+        )
+        return 1
+
+    settings = Settings()
+    print(f"설정 페이지: http://{args.host}:{args.port}  (설정 파일: {settings.config_path})")
+    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 async def _find_region(args: argparse.Namespace) -> int:
     settings = Settings()
     client = NaverLandClient(timeout=settings.request_timeout_seconds)
@@ -110,11 +129,18 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("find-region", help="지역명으로 cortarNo 찾기 (예: 서울 강남구 역삼동)")
     p.add_argument("query", nargs="+", help="상위 지역부터 띄어쓴 이름")
 
+    p = sub.add_parser("web", help="브라우저에서 조건을 편집하는 설정 페이지 실행")
+    p.add_argument("--host", default="127.0.0.1", help="기본 127.0.0.1 (인증이 없으니 외부 노출 금지)")
+    p.add_argument("--port", type=int, default=8765)
+
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+
+    if args.command == "web":  # uvicorn 이 자체 이벤트 루프를 돌린다
+        return _web(args)
 
     handlers = {
         "run": _run,
