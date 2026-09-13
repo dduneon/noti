@@ -92,7 +92,8 @@ async def _doctor(args: argparse.Namespace) -> int:
                 print("--raw 는 mobile 소스에서만 지원합니다.", file=sys.stderr)
                 return 1
             for sample in await client.dump_raw():
-                print(f"===== {sample['label']} : {sample.get('path')} {sample.get('params')}")
+                print(f"===== {sample['label']}  [{sample.get('status', '-')}] {sample.get('path')}")
+                print(f"  params: {sample.get('params')}")
                 if sample.get("error"):
                     print(f"  오류: {sample['error']}")
                 print(sample.get("body") or "(빈 응답)")
