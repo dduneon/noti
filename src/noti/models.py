@@ -120,6 +120,43 @@ class Listing:
         return " · ".join(bits)
 
     @classmethod
+    def from_mobile(cls, raw: dict, *, complex_no: str | None = None) -> Listing:
+        """m.land.naver.com 응답 1건을 Listing 으로.
+
+        모바일 API 는 가격을 숫자(만원)로 주므로 문자열 파싱이 필요 없다.
+        표기 필드(hanPrc/prcInfo)가 있으면 그걸 그대로 쓰고, 없으면 숫자로 만든다.
+        """
+        deposit = _maybe_int_value(pick(raw, "prc", "dealPrc", "wrprc"))
+        monthly = _maybe_int_value(pick(raw, "rentPrc"))
+        price_text = str(pick(raw, "hanPrc", "prcInfo", "dealOrWarrantPrc") or "")
+        if not price_text:
+            price_text = _format_price(deposit, monthly)
+        elif deposit is None:  # 표기만 온 경우 숫자는 파싱해서 채운다
+            deposit, monthly = parse_price(price_text)
+
+        floor, total_floor = parse_floor(str(pick(raw, "flrInfo", "floorInfo") or "") or None)
+        return cls(
+            article_no=str(pick(raw, "atclNo", "articleNo") or ""),
+            name=str(pick(raw, "atclNm", "articleName", "bildNm") or "이름 없음"),
+            trade_type=str(pick(raw, "tradTpNm", "tradeTypeName") or "?"),
+            price_text=price_text,
+            deposit=deposit,
+            monthly=monthly,
+            area_m2=_maybe_float(pick(raw, "spc2", "area2")),
+            supply_area_m2=_maybe_float(pick(raw, "spc1", "area1")),
+            area_name=_maybe_str(pick(raw, "areaName", "spcNm")),
+            floor=floor,
+            total_floor=total_floor,
+            direction=_maybe_str(pick(raw, "direction")),
+            building_name=_maybe_str(pick(raw, "bildNm", "buildingName")),
+            realtor=_maybe_str(pick(raw, "rltrNm", "realtorName")),
+            confirm_date=_maybe_str(pick(raw, "atclCfmYmd", "cfmYmd", "articleConfirmYmd")),
+            feature_desc=_maybe_str(pick(raw, "atclFetrDesc", "articleFeatureDesc")),
+            tags=list(raw.get("tagList") or []),
+            complex_no=complex_no or _maybe_str(pick(raw, "hscpNo", "complexNo")),
+        )
+
+    @classmethod
     def from_api(cls, raw: dict) -> Listing:
         """네이버 articles API 응답 1건을 Listing 으로."""
         price_text = raw.get("dealOrWarrantPrc") or ""
@@ -151,8 +188,41 @@ class Listing:
         )
 
 
+def pick(raw: dict, *keys: str) -> object | None:
+    """여러 후보 키 중 먼저 값이 있는 것을 고른다.
+
+    모바일 API 는 응답 필드 이름이 엔드포인트마다 조금씩 다르다(atclNm/atclNo,
+    prcInfo/hanPrc 등). 이름 하나가 바뀌어도 전체가 깨지지 않게 후보를 나열해 둔다.
+    """
+    for key in keys:
+        value = raw.get(key)
+        if value not in (None, "", []):
+            return value
+    return None
+
+
 def _maybe_float(value: object) -> float | None:
     try:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
+
+
+def _maybe_int_value(value: object) -> int | None:
+    try:
+        return int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_str(value: object) -> str | None:
+    return str(value) if value not in (None, "") else None
+
+
+def _format_price(deposit: int | None, monthly: int | None) -> str:
+    """만원 단위 숫자를 '9억 5,000' / '1,000/70' 표기로."""
+    if deposit is None:
+        return ""
+    eok, rest = divmod(deposit, 10_000)
+    text = f"{eok}억 {rest:,}" if eok and rest else f"{eok}억" if eok else f"{deposit:,}"
+    return f"{text}/{monthly:,}" if monthly else text

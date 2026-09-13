@@ -102,8 +102,12 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
-    # 네이버 매물 API 용 Authorization 토큰(JWT). 브라우저 개발자도구에서 복사한다.
-    # 페이지의 JS 가 만들어 붙이는 값이라 서버가 쿠키만으로는 얻을 수 없다.
+    # 어느 엔드포인트를 쓸지. mobile 은 토큰이 필요 없어 기본값이다.
+    # desktop 은 new.land 의 API 로, 아래 naver_auth_token 이 있어야 동작한다.
+    source: Literal["mobile", "desktop"] = "mobile"
+
+    # desktop 소스를 쓸 때만 필요한 Authorization 토큰(JWT).
+    # 페이지의 JS 가 브라우저에서 만들어 붙이는 값이라 서버가 쿠키만으로는 얻을 수 없다.
     naver_auth_token: str | None = None
 
     config_path: Path = Path("config.yaml")

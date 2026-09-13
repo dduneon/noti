@@ -4,30 +4,19 @@ from fastapi.testclient import TestClient
 from noti.config import Settings, WatchConfig
 from noti.web import create_app
 
+# 모바일(m.land) 응답 모양
 REGION_TREE = {
-    "0000000000": [{"cortarNo": "1100000000", "cortarName": "서울시"}],
-    "1100000000": [{"cortarNo": "1168000000", "cortarName": "강남구"}],
-    "1168000000": [{"cortarNo": "1168010100", "cortarName": "역삼동"}],
+    "0000000000": [{"cortarNo": "1100000000", "cortarNm": "서울시", "lat": 37.56, "lon": 126.97}],
+    "1100000000": [{"cortarNo": "1168000000", "cortarNm": "강남구", "lat": 37.51, "lon": 127.04}],
+    "1168000000": [{"cortarNo": "1168010100", "cortarNm": "역삼동", "lat": 37.50, "lon": 127.03}],
     "1168010100": [],
 }
 
 ARTICLES = [
-    {
-        "articleNo": "1",
-        "articleName": "○○아파트",
-        "tradeTypeName": "전세",
-        "dealOrWarrantPrc": "8억",
-        "area2": 84.9,
-        "floorInfo": "7/15",
-    },
-    {
-        "articleNo": "2",
-        "articleName": "△△아파트",
-        "tradeTypeName": "전세",
-        "dealOrWarrantPrc": "15억",
-        "area2": 114.0,
-        "floorInfo": "3/15",
-    },
+    {"atclNo": "1", "atclNm": "○○아파트", "tradTpNm": "전세", "prc": 80000, "hanPrc": "8억",
+     "spc2": 84.9, "flrInfo": "7/15"},
+    {"atclNo": "2", "atclNm": "△△아파트", "tradTpNm": "전세", "prc": 150000, "hanPrc": "15억",
+     "spc2": 114.0, "flrInfo": "3/15"},
 ]
 
 
@@ -44,9 +33,9 @@ def client(tmp_path, monkeypatch):
 
     with TestClient(app) as test_client:
         async def fake_get_json(path, params):
-            if path == "/api/regions/list":
-                return {"regionList": REGION_TREE.get(str(params["cortarNo"]), [])}
-            return {"articleList": ARTICLES, "isMoreData": False}
+            if path == "/map/getRegionList":
+                return {"result": {"list": REGION_TREE.get(str(params["cortarNo"]), [])}}
+            return {"body": ARTICLES, "more": False}
 
         monkeypatch.setattr(app.state.client, "_get_json", fake_get_json)
         test_client.settings = settings
