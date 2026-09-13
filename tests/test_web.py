@@ -146,3 +146,13 @@ def test_save_falls_back_when_rename_is_blocked(client, monkeypatch):
     assert response.status_code == 200
     assert "덮어쓰기" in client.settings.config_path.read_text(encoding="utf-8")
     assert not client.settings.config_path.with_suffix(".yaml.tmp").exists()
+
+
+def test_cli_run_reports_missing_config(tmp_path, capsys, monkeypatch):
+    """설정 파일이 없을 때 트레이스백 대신 안내를 출력한다."""
+    from noti.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NOTI_CONFIG_PATH", str(tmp_path / "없는파일.yaml"))
+    assert main(["once", "--console"]) == 1
+    assert "설정 파일이 없습니다" in capsys.readouterr().err

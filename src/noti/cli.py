@@ -28,7 +28,19 @@ def build_notifier(settings: Settings, *, force_console: bool = False) -> Notifi
 
 async def _run(args: argparse.Namespace) -> int:
     settings = Settings()
-    config = WatchConfig.load(args.config or settings.config_path)
+    config_path = args.config or settings.config_path
+    try:
+        config = WatchConfig.load(config_path)
+    except FileNotFoundError:
+        # 트레이스백 대신 무엇을 해야 하는지 알려준다(도커에서 특히 헷갈린다).
+        print(
+            f"설정 파일이 없습니다: {config_path}\n"
+            "  - 직접 실행: cp config.example.yaml config.yaml\n"
+            "  - 도커: 호스트의 ./config 디렉터리에 config.yaml 을 두세요\n"
+            "    (.env 에 NOTI_CONFIG_PATH 가 남아 있으면 컨테이너 경로를 덮어씁니다)",
+            file=sys.stderr,
+        )
+        return 1
     notifier = build_notifier(settings, force_console=args.console)
 
     client = NaverLandClient(
