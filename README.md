@@ -142,18 +142,50 @@ sudo journalctl -u noti -f        # 로그 확인
 - 코드를 업데이트했으면: `sudo ./deploy/install.sh && sudo systemctl restart noti noti-web`
   (조건만 바꿨다면 재시작 불필요 — 루프가 알아서 다시 읽습니다.)
 
-### 방법 B. Docker
+### 방법 B. Docker (compose)
 
 ```bash
-git clone <repo> noti && cd noti
-cp .env.example .env && cp config.example.yaml config.yaml
+git clone https://github.com/dduneon/noti.git && cd noti
+
+cp .env.example .env                          # 텔레그램 토큰/챗ID 입력
+mkdir -p config
+cp config.example.yaml config/config.yaml     # 조건은 나중에 설정 페이지에서 고쳐도 됨
+chmod 600 .env
+
 docker compose up -d --build
-docker compose logs -f
+docker compose logs -f noti
 ```
 
-감시 루프와 설정 페이지 컨테이너가 뜹니다. 페이지는 `127.0.0.1:8765` 로만 노출되니
-원격 서버라면 역시 SSH 터널로 접속하세요. DB 는 `noti-data` 볼륨에 남아 재시작해도
-"이미 알린 매물" 기록이 유지됩니다.
+컨테이너 두 개가 뜹니다. 둘 다 같은 이미지이고 실행 커맨드만 다릅니다.
+
+| 컨테이너 | 하는 일 | 포트 |
+| --- | --- | --- |
+| `noti` | 감시 루프 (`noti run`) | 없음(아웃바운드만) |
+| `noti-web` | 설정 페이지 (`noti web`) | `127.0.0.1:8765` |
+
+상태는 두 군데에 있습니다.
+
+- `./config` (호스트 디렉터리 마운트) → `config.yaml`. 설정 페이지에서 저장하면 이 파일이 바뀌고,
+  감시 루프가 다음 사이클에 자동으로 다시 읽습니다. **재시작 불필요.**
+- `noti-data` 볼륨 → `/data/noti.db`. "이미 알린 매물" 기록이라 컨테이너를 새로 만들어도 유지됩니다.
+
+> 설정 파일은 **디렉터리째** 마운트합니다(`./config:/config`). 단일 파일을 bind mount 하면
+> 그 경로가 마운트 지점이 되어 설정 페이지의 원자적 저장(rename)이 실패합니다.
+
+설정 페이지 접속은 SSH 터널로:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 <서버>     # 이후 브라우저에서 http://127.0.0.1:8765
+```
+
+자주 쓰는 명령:
+
+```bash
+docker compose logs -f noti          # 감시 로그
+docker compose exec noti noti once --console   # 조회가 되는지 즉시 확인(알림 안 감)
+docker compose pull && docker compose up -d --build   # 코드 업데이트 후 재배포
+docker compose down                  # 정지 (볼륨은 유지)
+```
 
 ### 방법 C. cron 으로 주기 실행 (상주 프로세스가 싫다면)
 
