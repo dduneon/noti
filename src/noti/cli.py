@@ -87,6 +87,17 @@ async def _doctor(args: argparse.Namespace) -> int:
     settings = Settings()
     client = create_client(settings)
     try:
+        if getattr(args, "raw", False):
+            if not hasattr(client, "dump_raw"):
+                print("--raw 는 mobile 소스에서만 지원합니다.", file=sys.stderr)
+                return 1
+            for sample in await client.dump_raw():
+                print(f"===== {sample['label']} : {sample.get('path')} {sample.get('params')}")
+                if sample.get("error"):
+                    print(f"  오류: {sample['error']}")
+                print(sample.get("body") or "(빈 응답)")
+                print()
+            return 0
         result = await client.probe()
     finally:
         await client.aclose()
@@ -203,7 +214,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("find-region", help="지역명으로 cortarNo 찾기 (예: 서울 강남구 역삼동)")
     p.add_argument("query", nargs="+", help="상위 지역부터 띄어쓴 이름")
 
-    sub.add_parser("doctor", help="네이버 접속·인증 점검 (문제 생겼을 때 먼저 실행)")
+    p = sub.add_parser("doctor", help="네이버 접속·인증 점검 (문제 생겼을 때 먼저 실행)")
+    p.add_argument("--raw", action="store_true", help="응답 원문을 그대로 출력(필드명 확인용)")
 
     p = sub.add_parser("web", help="브라우저에서 조건을 편집하는 설정 페이지 실행")
     p.add_argument("--host", default="127.0.0.1", help="기본 127.0.0.1 (인증이 없으니 외부 노출 금지)")
