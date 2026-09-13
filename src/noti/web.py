@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 from .config import Settings, Target, WatchConfig
 from .filters import matches
 from .notifiers import TelegramNotifier
-from .sources import NaverLandClient, NaverLandError
+from .sources import NaverLandError, create_client
 
 logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
@@ -42,11 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.client = NaverLandClient(
-            auth_token=settings.naver_auth_token,
-            timeout=settings.request_timeout_seconds,
-            request_delay=settings.request_delay_seconds,
-        )
+        app.state.client = create_client(settings)
         try:
             yield
         finally:
@@ -104,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/preview")
     async def preview(request: PreviewRequest) -> PreviewResponse:
         """조건을 저장하기 전에 어떤 매물이 걸리는지 미리 본다(알림은 보내지 않음)."""
-        client: NaverLandClient = app.state.client
+        client = app.state.client
         scopes = await _call_naver(client.resolve_scopes(request.target))
         listings = await _call_naver(client.fetch_listings(request.target))
         matched = [x for x in listings if matches(x, request.target.criteria)]

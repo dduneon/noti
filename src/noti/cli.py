@@ -10,7 +10,7 @@ import sys
 from .config import Settings, WatchConfig
 from .notifiers import ConsoleNotifier, Notifier, TelegramNotifier
 from .service import MonitorService
-from .sources import NaverLandClient
+from .sources import create_client
 
 
 def build_notifier(settings: Settings, *, force_console: bool = False) -> Notifier:
@@ -43,11 +43,7 @@ async def _run(args: argparse.Namespace) -> int:
         return 1
     notifier = build_notifier(settings, force_console=args.console)
 
-    client = NaverLandClient(
-        auth_token=settings.naver_auth_token,
-        timeout=settings.request_timeout_seconds,
-        request_delay=settings.request_delay_seconds,
-    )
+    client = create_client(settings)
     store = None
     try:
         from .store import Store
@@ -89,21 +85,21 @@ TOKEN_HOWTO = """토큰 얻는 법 (2분):
 async def _doctor(args: argparse.Namespace) -> int:
     """네이버 접속·인증이 어디서 막히는지 점검한다."""
     settings = Settings()
-    client = NaverLandClient(
-        auth_token=settings.naver_auth_token, timeout=settings.request_timeout_seconds
-    )
+    client = create_client(settings)
     try:
         result = await client.probe()
     finally:
         await client.aclose()
 
-    print("== 네이버 토큰 ==")
-    print(
-        "  직접 설정한 토큰(NOTI_NAVER_AUTH_TOKEN): "
-        + ("있음" if result.get("manual_token") else "없음")
-    )
-    print("\n== 쿠키 핸드셰이크 ==")
-    for attempt in result.get("handshake", []):
+    source = result.get("source", "desktop")
+    print(f"== 소스: {source} ==")
+    if source == "desktop":
+        print(
+            "  직접 설정한 토큰(NOTI_NAVER_AUTH_TOKEN): "
+            + ("있음" if result.get("manual_token") else "없음")
+        )
+        print("\n== 쿠키 핸드셰이크 ==")
+    for attempt in result.get("handshake", []) if source == "desktop" else []:
         if "error" in attempt:
             print(f"  {attempt['path']:<12} 오류: {attempt['error']}")
             continue
@@ -115,24 +111,29 @@ async def _doctor(args: argparse.Namespace) -> int:
         print(f"\n결과: 토큰을 받지 못했습니다.\n  {result['token_error']}")
         return 1
 
-    print(f"\n토큰: {result['token']}")
-    print(f"Authorization: {result.get('auth_header')}")
+    if "token" in result:
+        print(f"\n토큰: {result['token']}")
+        print(f"Authorization: {result.get('auth_header')}")
 
     if "regions_error" in result:
-        print(f"지역 목록(인증 불필요) 조회 실패: {result['regions_error']}")
-    else:
-        print(f"지역 목록 조회 성공: {result.get('regions_sample')}")
+        print(f"지역 목록 조회 실패: {result['regions_error']}")
+        print("\n네이버에 접속 자체가 안 되는 상태입니다(차단·네트워크 확인).")
+        return 1
+    print(f"지역 목록 조회 성공: {result.get('regions_sample')}")
 
     if "articles_error" in result:
         # 매물 목록만 실패하면 인증 토큰 문제다(지역 목록은 인증이 필요 없다).
         print(f"매물 목록 조회 실패: {result['articles_error']}")
-        print(
-            "\n매물 API 는 브라우저의 JS 가 만드는 Authorization 토큰을 요구합니다.\n"
-            + TOKEN_HOWTO
-        )
+        if source == "desktop":
+            print(
+                "\n데스크톱(new.land) 매물 API 는 브라우저의 JS 가 만드는 토큰을 요구합니다.\n"
+                "NOTI_SOURCE=mobile 로 두면 토큰 없이 동작합니다(기본값).\n" + TOKEN_HOWTO
+            )
         return 1
 
     print(f"매물 목록 조회 성공: 역삼동 {result['articles_count']}건")
+    for sample in result.get("articles_sample", []):
+        print(f"  · {sample}")
     print("\n정상입니다.")
     return 0
 
@@ -158,9 +159,7 @@ def _web(args: argparse.Namespace) -> int:
 
 async def _find_region(args: argparse.Namespace) -> int:
     settings = Settings()
-    client = NaverLandClient(
-        auth_token=settings.naver_auth_token, timeout=settings.request_timeout_seconds
-    )
+    client = create_client(settings)
     try:
         matches = await client.search_regions(" ".join(args.query))
     finally:
@@ -176,9 +175,7 @@ async def _find_region(args: argparse.Namespace) -> int:
 
 async def _regions(args: argparse.Namespace) -> int:
     settings = Settings()
-    client = NaverLandClient(
-        auth_token=settings.naver_auth_token, timeout=settings.request_timeout_seconds
-    )
+    client = create_client(settings)
     try:
         for region in await client.fetch_regions(args.cortar_no):
             print(f"{region.get('cortarNo')}\t{region.get('cortarName')}")
