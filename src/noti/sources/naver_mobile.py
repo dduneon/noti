@@ -36,13 +36,17 @@ BBOX_PAD = 0.025
 ZOOM = 14
 MAX_CLUSTERS = 10  # 한 지역에서 조회할 클러스터 수 상한(요청 폭주 방지)
 
+# articleList 는 (zoom, 지도 범위) 조합이 맞아야 응답을 준다. 어떤 조합이 통하는지는
+# 네이버 사정에 따라 바뀌므로 넓은 것부터 차례로 시도하고, 통한 조합을 기억한다.
+ARTICLE_VIEWPORTS = ((14, 0.025), (16, 0.008), (17, 0.005), (19, 0.0016), (13, 0.05))
 
-def _bounds(lat: float, lon: float) -> dict[str, float]:
+
+def _bounds(lat: float, lon: float, pad: float = BBOX_PAD) -> dict[str, float]:
     return {
-        "btm": round(lat - BBOX_PAD, 6),
-        "top": round(lat + BBOX_PAD, 6),
-        "lft": round(lon - BBOX_PAD, 6),
-        "rgt": round(lon + BBOX_PAD, 6),
+        "btm": round(lat - pad, 6),
+        "top": round(lat + pad, 6),
+        "lft": round(lon - pad, 6),
+        "rgt": round(lon + pad, 6),
     }
 
 
@@ -57,6 +61,7 @@ class NaverMobileClient:
         self._region_cache: dict[str, list[dict]] = {}
         self.auth_token = None  # 인터페이스 호환용(모바일은 토큰이 필요 없다)
         self.last_raw: dict[str, object] = {}  # doctor --raw 용 마지막 응답
+        self._viewport_index = 0  # 어떤 (zoom, 범위) 조합이 통했는지 기억
 
     async def __aenter__(self) -> Self:
         return self
@@ -226,36 +231,79 @@ class NaverMobileClient:
     async def _fetch_region_page(
         self, cortar_no: str, target: Target, page: int
     ) -> tuple[list[dict], bool]:
-        """지역 매물. 지도 클러스터를 먼저 얻고(lgeo) 그 안의 매물을 가져온다.
+        """지역 매물.
 
-        articleList 는 lgeo 없이 부르면 null 을 돌려준다. 그래서 clusterList 로
-        해당 범위의 클러스터 목록을 받은 뒤, 클러스터마다 매물을 조회한다.
+        1순위는 articleList 직접 호출(뷰포트 조합을 바꿔가며 시도),
+        비어 있으면 클러스터(lgeo) 경유로 한 번 더 시도한다.
         """
         if page > 1:
-            return [], False  # 페이지 순회는 클러스터 단위로 이 안에서 처리한다
+            return [], False  # 페이지 순회는 이 안에서 처리한다
 
         center = await self._region_center(cortar_no)
         if not center:
             raise NaverLandError(f"지역 {cortar_no} 의 좌표를 찾지 못했습니다")
 
+        rows = await self._articles_by_viewport(center, target)
+        if rows:
+            return rows, False
+
+        logger.info("지역 %s: 직접 조회가 비어 클러스터 경유로 재시도합니다", cortar_no)
         bounds = _bounds(*center)
         clusters = await self._cluster_list(cortar_no, target, center, bounds)
-        if not clusters:
-            return [], False
-
-        rows: list[dict] = []
+        cluster_rows: list[dict] = []
         for index, cluster in enumerate(clusters[:MAX_CLUSTERS]):
             if index:
                 await asyncio.sleep(self._request_delay)
-            rows.extend(await self._cluster_articles(cluster, target, bounds))
-        if len(clusters) > MAX_CLUSTERS:
-            logger.warning(
-                "지역 %s 의 클러스터가 %d개라 앞에서 %d개만 조회합니다",
-                cortar_no,
-                len(clusters),
-                MAX_CLUSTERS,
+            cluster_rows.extend(await self._cluster_articles(cluster, target, bounds))
+        return cluster_rows, False
+
+    async def _articles_by_viewport(
+        self, center: tuple[float, float], target: Target
+    ) -> list[dict]:
+        """통하는 (zoom, 범위) 조합을 찾아 매물을 가져오고 그 조합을 기억한다."""
+        order = ARTICLE_VIEWPORTS[self._viewport_index :] + ARTICLE_VIEWPORTS[
+            : self._viewport_index
+        ]
+        for zoom, pad in order:
+            rows = await self._article_list(center, target, zoom, pad)
+            if rows:
+                index = ARTICLE_VIEWPORTS.index((zoom, pad))
+                if index != self._viewport_index:
+                    logger.info("매물 조회 뷰포트를 z=%d(±%s)로 바꿉니다", zoom, pad)
+                    self._viewport_index = index
+                return rows
+            await asyncio.sleep(self._request_delay)
+        return []
+
+    async def _article_list(
+        self, center: tuple[float, float], target: Target, zoom: int, pad: float
+    ) -> list[dict]:
+        lat, lon = center
+        rows: list[dict] = []
+        for page in range(1, target.max_pages + 1):
+            if page > 1:
+                await asyncio.sleep(self._request_delay)
+            payload = await self._get_json(
+                "/cluster/ajax/articleList",
+                {
+                    "rletTpCd": ":".join(target.real_estate_types),
+                    "tradTpCd": ":".join(target.trade_types),
+                    "z": zoom,
+                    "lat": lat,
+                    "lon": lon,
+                    **_bounds(lat, lon, pad),
+                    "showR0": "",
+                    "totCnt": 200,
+                    "sort": "rank",
+                    "page": page,
+                },
+                allow_non_json=True,
             )
-        return rows, False
+            body = payload.get("body") or []
+            rows.extend(body)
+            if not payload.get("more"):
+                break
+        return rows
 
     async def _cluster_list(
         self,
@@ -352,29 +400,38 @@ class NaverMobileClient:
         }
 
         samples = [
-            await self._raw_get("지역 목록", "/map/getRegionList", {"cortarNo": "1168000000"}),
+            await self._raw_get("지역 목록", "/map/getRegionList", {"cortarNo": "1168000000"})
+        ]
+
+        # articleList 를 뷰포트 조합별로 시도한다(어떤 조합이 본문을 주는지 비교).
+        for zoom, pad in ARTICLE_VIEWPORTS:
+            samples.append(
+                await self._raw_get(
+                    f"매물 직접조회 z={zoom} ±{pad}",
+                    "/cluster/ajax/articleList",
+                    {
+                        "rletTpCd": "APT",
+                        "tradTpCd": "A1",
+                        "z": zoom,
+                        "lat": lat,
+                        "lon": lon,
+                        **_bounds(lat, lon, pad),
+                        "showR0": "",
+                        "totCnt": 200,
+                        "sort": "rank",
+                        "page": 1,
+                    },
+                )
+            )
+
+        samples.append(
             await self._raw_get(
-                "클러스터 A (z=14, cortarNo 있음)",
+                "클러스터",
                 "/cluster/clusterList",
                 {**base, "z": 14, "cortarNo": "1168010100"},
-            ),
-            await self._raw_get(
-                "클러스터 B (z=13, cortarNo 없음)",
-                "/cluster/clusterList",
-                {**base, "z": 13, "cortarNo": ""},
-            ),
-            await self._raw_get(
-                "클러스터 C (지도 Referer)",
-                "/cluster/clusterList",
-                {**base, "z": 13, "cortarNo": "1168010100"},
                 headers=map_referer,
-            ),
-            await self._raw_get(
-                "단지 매물 (hscpNo=111515)",
-                "/complex/getComplexArticleList",
-                {"hscpNo": "111515", "tradTpCd": "A1", "order": "point_", "page": 1},
-            ),
-        ]
+            )
+        )
         return samples
 
     async def _raw_get(
