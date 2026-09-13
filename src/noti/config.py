@@ -53,6 +53,11 @@ class Target(BaseModel):
 
 class WatchConfig(BaseModel):
     notify_on_first_run: bool = False  # 첫 실행 때 기존 매물 전부 알림 보낼지
+    # global: 감시 대상이 겹쳐도 같은 매물은 한 번만 (권장)
+    # target: 대상마다 따로 기억 (대상별로 각각 받고 싶을 때)
+    dedupe_scope: Literal["global", "target"] = "global"
+    merge_same_property: bool = True  # 같은 집을 여러 중개사가 올린 경우 한 번만
+    notify_on_price_change: bool = True  # 이미 알린 매물의 가격이 바뀌면 다시 알림
     targets: list[Target]
 
     @classmethod

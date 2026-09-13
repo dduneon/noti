@@ -251,7 +251,20 @@ function buildCard(target, onRemove) {
   return node;
 }
 
-const state = { notify_on_first_run: false, targets: [] };
+const state = {
+  notify_on_first_run: false,
+  dedupe_scope: "global",
+  merge_same_property: true,
+  notify_on_price_change: true,
+  targets: [],
+};
+
+// 체크박스 ↔ state 연결 (dedupe_scope 만 문자열이라 따로 변환)
+const TOGGLES = [
+  ["#notifyFirstRun", "notify_on_first_run"],
+  ["#mergeSameProperty", "merge_same_property"],
+  ["#notifyPriceChange", "notify_on_price_change"],
+];
 
 function render() {
   const container = $("#targets");
@@ -276,14 +289,18 @@ async function load() {
       : '텔레그램 <span class="off">미설정(.env 확인)</span>');
 
   const config = await api("/api/config");
-  state.notify_on_first_run = config.notify_on_first_run;
-  state.targets = config.targets;
-  $("#notifyFirstRun").checked = state.notify_on_first_run;
+  Object.assign(state, config);
+  for (const [selector, key] of TOGGLES) $(selector).checked = Boolean(state[key]);
+  $("#globalDedupe").checked = state.dedupe_scope === "global";
   render();
 }
 
-$("#notifyFirstRun").addEventListener("change", (e) => {
-  state.notify_on_first_run = e.target.checked;
+for (const [selector, key] of TOGGLES) {
+  $(selector).addEventListener("change", (e) => (state[key] = e.target.checked));
+}
+
+$("#globalDedupe").addEventListener("change", (e) => {
+  state.dedupe_scope = e.target.checked ? "global" : "target";
 });
 
 $("#addTarget").addEventListener("click", () => {

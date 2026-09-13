@@ -91,6 +91,19 @@ class Listing:
         return f"https://new.land.naver.com/articles/{self.article_no}"
 
     @property
+    def fingerprint(self) -> str | None:
+        """'같은 집' 판별용 지문. 단서가 부족하면 None(=묶지 않음).
+
+        매물번호는 중개업소마다 다르게 발급되므로, 같은 집이 여러 건 올라오면
+        단지(또는 건물)·전용면적·층·거래유형이 모두 같은 것을 한 집으로 본다.
+        가격은 뺀다 — 중개사마다 호가가 다를 수 있고, 가격 변동 알림과도 겹친다.
+        """
+        place = self.complex_no or self.building_name
+        if not place or self.area_m2 is None or self.floor is None:
+            return None
+        return f"{place}|{self.area_m2:g}|{self.floor}|{self.trade_type}"
+
+    @property
     def searchable_text(self) -> str:
         """키워드 필터가 훑는 텍스트."""
         parts = [self.name, self.building_name, self.feature_desc, *self.tags]

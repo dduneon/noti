@@ -13,7 +13,7 @@ from .filters import matches
 from .models import Listing
 from .notifiers import Notifier
 from .sources import NaverLandClient, NaverLandError
-from .store import Store
+from .store import GLOBAL_SCOPE, Store
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +89,21 @@ class MonitorService:
 
         return notified
 
+    @property
+    def _dedupe_scope(self) -> str:
+        """global 이면 대상이 겹쳐도 같은 집은 한 번만 알린다."""
+        return GLOBAL_SCOPE if self._config.dedupe_scope == "global" else ""
+
     async def _process_target(self, target: Target) -> list[Listing]:
+        scope = self._dedupe_scope or target.name
         listings = await self._client.fetch_listings(target)
         matched = [listing for listing in listings if matches(listing, target.criteria)]
-        fresh = self._store.filter_new(target.name, matched)
+        fresh = self._store.filter_new(
+            scope,
+            matched,
+            merge_same_property=self._config.merge_same_property,
+            notify_on_price_change=self._config.notify_on_price_change,
+        )
 
         # 첫 실행에는 기존 매물이 전부 '새 매물'이라 알림 폭탄이 된다.
         first_run = not self._store.is_bootstrapped(target.name)
@@ -120,6 +131,8 @@ class MonitorService:
                 )
 
         # 알림을 생략했어도 본 매물은 기록해 둔다(다음 사이클부터 진짜 신규만 알림).
-        self._store.remember(target.name, matched)
+        self._store.remember(
+            scope, matched, merge_same_property=self._config.merge_same_property
+        )
         self._store.mark_bootstrapped(target.name)
         return sent
