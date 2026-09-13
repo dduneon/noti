@@ -1,0 +1,70 @@
+"""토큰 핸드셰이크 동작 (네이버 라우팅이 바뀌어도 버티는지)."""
+
+import httpx
+import pytest
+
+from noti.sources import NaverLandClient, NaverLandError
+from noti.sources.naver import TOKEN_COOKIE
+
+
+def client_with(handler) -> NaverLandClient:
+    client = NaverLandClient(request_delay=0)
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=True, base_url=""
+    )
+    return client
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_next_path_when_first_redirects():
+    """실제 증상: /complexes 가 /404 로 302 되면서 쿠키를 못 받는다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/complexes":
+            return httpx.Response(302, headers={"Location": "https://new.land.naver.com/404"})
+        if path == "/404":
+            return httpx.Response(200, text="not found")
+        if path == "/":
+            return httpx.Response(200, headers={"Set-Cookie": f"{TOKEN_COOKIE}=jwt-token"})
+        return httpx.Response(200)
+
+    client = client_with(handler)
+    try:
+        assert await client._ensure_token() == "jwt-token"
+        assert client.last_handshake[0]["got_token"] is True  # "/" 에서 바로 받는다
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_error_lists_every_attempt_when_no_cookie():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"Location": "https://new.land.naver.com/404"}) \
+            if request.url.path != "/404" else httpx.Response(200)
+
+    client = client_with(handler)
+    try:
+        with pytest.raises(NaverLandError) as exc:
+            await client._ensure_token()
+        message = str(exc.value)
+        assert "/complexes" in message and "/404" in message  # 어디서 막혔는지 보인다
+        assert len(client.last_handshake) == 5
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_token_and_regions():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/regions/list":
+            return httpx.Response(200, json={"regionList": [{"cortarName": "서울시"}]})
+        return httpx.Response(200, headers={"Set-Cookie": f"{TOKEN_COOKIE}=abcdefghijklmnop"})
+
+    client = client_with(handler)
+    try:
+        result = await client.probe()
+        assert result["token"].startswith("abcdefghijkl")
+        assert result["regions_sample"] == ["서울시"]
+    finally:
+        await client.aclose()
