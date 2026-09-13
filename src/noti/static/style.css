@@ -50,6 +50,9 @@ header h1 { font-size: 18px; margin: 0 0 4px; }
   margin-bottom: 16px;
 }
 .bar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.options { display: grid; gap: 6px; }
+.opt { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.opt input { width: auto; }
 
 button {
   font: inherit; cursor: pointer; border-radius: 8px;

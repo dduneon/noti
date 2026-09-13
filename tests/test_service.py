@@ -139,3 +139,40 @@ async def test_broken_config_keeps_previous(tmp_path):
 
     assert [t.name for t in service._config.targets] == ["테스트"]  # 이전 설정 유지
     store.close()
+
+
+def build_two_targets(tmp_path, listings, *, dedupe_scope="global"):
+    settings = Settings(db_path=tmp_path / "t.db", request_delay_seconds=0, jitter_seconds=0)
+    config = WatchConfig(
+        notify_on_first_run=True,
+        dedupe_scope=dedupe_scope,
+        targets=[
+            Target(name="강남구 전세", kind="region", cortar_no="1168000000"),
+            Target(name="역삼동 전세", kind="region", cortar_no="1168010100"),
+        ],
+    )
+    store = Store(settings.db_path)
+    notifier = RecordingNotifier()
+    return MonitorService(settings, config, FakeClient(listings), store, notifier), store, notifier
+
+
+@pytest.mark.asyncio
+async def test_overlapping_targets_notify_once_by_default(tmp_path):
+    """강남구와 역삼동을 둘 다 감시해도 같은 매물은 한 번만 온다."""
+    listing = make("1")
+    listing.complex_no, listing.area_m2, listing.floor = "111515", 84.9, 7
+    service, store, notifier = build_two_targets(tmp_path, [listing])
+
+    await service.run_once()
+    assert [name for name, _ in notifier.sent] == ["강남구 전세"]
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_target_scope_notifies_per_target(tmp_path):
+    listing = make("1")
+    service, store, notifier = build_two_targets(tmp_path, [listing], dedupe_scope="target")
+
+    await service.run_once()
+    assert [name for name, _ in notifier.sent] == ["강남구 전세", "역삼동 전세"]
+    store.close()

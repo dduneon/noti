@@ -17,10 +17,24 @@
 
 <main class="wrap">
   <section class="bar">
-    <label class="switch">
-      <input type="checkbox" id="notifyFirstRun">
-      <span>첫 실행에 기존 매물도 알림</span>
-    </label>
+    <div class="options">
+      <label class="opt">
+        <input type="checkbox" id="notifyFirstRun">
+        <span>첫 실행에 기존 매물도 알림</span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="globalDedupe">
+        <span>감시 대상이 겹쳐도 같은 매물은 한 번만</span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="mergeSameProperty">
+        <span>같은 집을 여러 중개사가 올리면 한 번만</span>
+      </label>
+      <label class="opt">
+        <input type="checkbox" id="notifyPriceChange">
+        <span>가격이 바뀌면 다시 알림</span>
+      </label>
+    </div>
     <div class="bar-actions">
       <button id="testNotify" class="ghost">알림 테스트</button>
       <button id="addTarget" class="ghost">+ 감시 대상 추가</button>
