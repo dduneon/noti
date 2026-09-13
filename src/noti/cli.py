@@ -143,9 +143,22 @@ async def _doctor(args: argparse.Namespace) -> int:
             )
         return 1
 
-    print(f"매물 목록 조회 성공: 역삼동 {result['articles_count']}건")
+    if "clusters" in result:
+        print(f"지도 클러스터: {result['clusters']}개")
+    count = result["articles_count"]
+    print(f"매물 목록 조회: 역삼동 {count}건")
     for sample in result.get("articles_sample", []):
         print(f"  · {sample}")
+
+    if count == 0:
+        # 0건은 '정상'이 아니다. 어느 단계가 비었는지 알려준다.
+        stage = "클러스터" if result.get("clusters") == 0 else "매물 목록"
+        print(
+            f"\n{stage} 단계에서 빈 응답이 왔습니다. 파라미터가 맞지 않을 가능성이 큽니다.\n"
+            "`noti doctor --raw` 로 어떤 조합이 데이터를 주는지 비교해 보세요."
+        )
+        return 1
+
     print("\n정상입니다.")
     return 0
 

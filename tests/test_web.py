@@ -151,3 +151,26 @@ def test_cli_run_reports_missing_config(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("NOTI_CONFIG_PATH", str(tmp_path / "없는파일.yaml"))
     assert main(["once", "--console"]) == 1
     assert "설정 파일이 없습니다" in capsys.readouterr().err
+
+
+def test_doctor_reports_empty_result_as_failure(monkeypatch, capsys):
+    """0건인데 '정상입니다' 라고 하면 안 된다."""
+    from noti import cli
+
+    class EmptyClient:
+        async def probe(self):
+            return {
+                "source": "mobile",
+                "regions_sample": ["서울시"],
+                "clusters": 0,
+                "articles_count": 0,
+            }
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(cli, "create_client", lambda settings: EmptyClient())
+    assert cli.main(["doctor"]) == 1
+    output = capsys.readouterr().out
+    assert "클러스터 단계에서 빈 응답" in output
+    assert "정상입니다" not in output
