@@ -33,6 +33,17 @@ MOBILE_HEADERS = {
 }
 # 동 중심 좌표에서 지도 범위를 만들 때 쓰는 여유(도 단위). 약 2~3km.
 BBOX_PAD = 0.025
+ZOOM = 14
+MAX_CLUSTERS = 10  # 한 지역에서 조회할 클러스터 수 상한(요청 폭주 방지)
+
+
+def _bounds(lat: float, lon: float) -> dict[str, float]:
+    return {
+        "btm": round(lat - BBOX_PAD, 6),
+        "top": round(lat + BBOX_PAD, 6),
+        "lft": round(lon - BBOX_PAD, 6),
+        "rgt": round(lon + BBOX_PAD, 6),
+    }
 
 
 class NaverMobileClient:
@@ -100,8 +111,9 @@ class NaverMobileClient:
                         pick(region, "cortarNm", "cortarName", "CortarNm", "name", "cortarNMs")
                         or ""
                     ),
-                    "lat": pick(region, "lat", "centerLat", "y", "cortarLat"),
-                    "lon": pick(region, "lon", "centerLon", "x", "cortarLon", "lng"),
+                    # 모바일 응답은 MapYCrdn=위도, MapXCrdn=경도 로 준다.
+                    "lat": pick(region, "MapYCrdn", "lat", "centerLat", "cortarLat", "y"),
+                    "lon": pick(region, "MapXCrdn", "lon", "centerLon", "cortarLon", "lng", "x"),
                 }
             )
         return normalized
@@ -206,31 +218,99 @@ class NaverMobileClient:
     async def _fetch_region_page(
         self, cortar_no: str, target: Target, page: int
     ) -> tuple[list[dict], bool]:
-        """지역 매물. 지도 기반 API 라 동 중심 좌표로 범위를 만들어 넘긴다."""
+        """지역 매물. 지도 클러스터를 먼저 얻고(lgeo) 그 안의 매물을 가져온다.
+
+        articleList 는 lgeo 없이 부르면 null 을 돌려준다. 그래서 clusterList 로
+        해당 범위의 클러스터 목록을 받은 뒤, 클러스터마다 매물을 조회한다.
+        """
+        if page > 1:
+            return [], False  # 페이지 순회는 클러스터 단위로 이 안에서 처리한다
+
         center = await self._region_center(cortar_no)
         if not center:
             raise NaverLandError(f"지역 {cortar_no} 의 좌표를 찾지 못했습니다")
 
+        bounds = _bounds(*center)
+        clusters = await self._cluster_list(cortar_no, target, center, bounds)
+        if not clusters:
+            return [], False
+
+        rows: list[dict] = []
+        for index, cluster in enumerate(clusters[:MAX_CLUSTERS]):
+            if index:
+                await asyncio.sleep(self._request_delay)
+            rows.extend(await self._cluster_articles(cluster, target, bounds))
+        if len(clusters) > MAX_CLUSTERS:
+            logger.warning(
+                "지역 %s 의 클러스터가 %d개라 앞에서 %d개만 조회합니다",
+                cortar_no,
+                len(clusters),
+                MAX_CLUSTERS,
+            )
+        return rows, False
+
+    async def _cluster_list(
+        self,
+        cortar_no: str,
+        target: Target,
+        center: tuple[float, float],
+        bounds: dict[str, float],
+    ) -> list[dict]:
         lat, lon = center
         payload = await self._get_json(
-            "/cluster/ajax/articleList",
+            "/cluster/clusterList",
             {
+                "view": "atcl",
                 "cortarNo": cortar_no,
                 "rletTpCd": ":".join(target.real_estate_types),
                 "tradTpCd": ":".join(target.trade_types),
-                "z": 14,
+                "z": ZOOM,
                 "lat": lat,
                 "lon": lon,
-                "btm": round(lat - BBOX_PAD, 6),
-                "top": round(lat + BBOX_PAD, 6),
-                "lft": round(lon - BBOX_PAD, 6),
-                "rgt": round(lon + BBOX_PAD, 6),
-                "page": page,
-                "showR0": "",
+                **bounds,
+                "pCortarNo": "",
+                "addon": "COMPLEX",
+                "bAddon": "COMPLEX",
+                "isOnlyIsale": "false",
             },
+            allow_non_json=True,
         )
-        rows = payload.get("body") or (payload.get("result") or {}).get("list") or []
-        return rows, bool(payload.get("more"))
+        data = payload.get("data") or {}
+        clusters = data.get("ARTICLE") or data.get("COMPLEX") or []
+        return [cluster for cluster in clusters if cluster.get("lgeo")]
+
+    async def _cluster_articles(
+        self, cluster: dict, target: Target, bounds: dict[str, float]
+    ) -> list[dict]:
+        rows: list[dict] = []
+        for page in range(1, target.max_pages + 1):
+            if page > 1:
+                await asyncio.sleep(self._request_delay)
+            payload = await self._get_json(
+                "/cluster/ajax/articleList",
+                {
+                    "itemId": cluster.get("lgeo", ""),
+                    "mapKey": "",
+                    "lgeo": cluster.get("lgeo", ""),
+                    "showR0": "",
+                    "rletTpCd": ":".join(target.real_estate_types),
+                    "tradTpCd": ":".join(target.trade_types),
+                    "z": ZOOM,
+                    "lat": cluster.get("lat", 0),
+                    "lon": cluster.get("lon", 0),
+                    **bounds,
+                    "totCnt": cluster.get("count", 0),
+                    "cortarNo": "",
+                    "sort": "rank",
+                    "page": page,
+                },
+                allow_non_json=True,
+            )
+            body = payload.get("body") or []
+            rows.extend(body)
+            if not payload.get("more"):
+                break
+        return rows
 
     async def _region_center(self, cortar_no: str) -> tuple[float, float] | None:
         """동 자신의 좌표는 부모 지역 목록에 들어 있다(구 코드로 조회)."""
@@ -258,23 +338,31 @@ class NaverMobileClient:
 
         await capture("시/도 목록", self._get_json("/map/getRegionList", {"cortarNo": ROOT_CORTAR_NO}, allow_non_json=True))
         await capture("강남구 하위 동", self._get_json("/map/getRegionList", {"cortarNo": "1168000000"}, allow_non_json=True))
+        target = Target(name="점검", kind="region", cortar_no="1168010100", max_pages=1)
+        bounds = _bounds(37.499776, 127.03895)
+
         await capture(
-            "역삼동 매물",
+            "역삼동 클러스터",
+            self._cluster_list("1168010100", target, (37.499776, 127.03895), bounds),
+        )
+        # 클러스터를 하나 얻었으면 그 안의 매물 원문까지 본다.
+        clusters = []
+        try:
+            clusters = await self._cluster_list(
+                "1168010100", target, (37.499776, 127.03895), bounds
+            )
+        except (NaverLandError, httpx.HTTPError, OSError):
+            pass
+        if clusters:
+            await capture("역삼동 매물", self._cluster_articles(clusters[0], target, bounds))
+        else:
+            samples.append({"label": "역삼동 매물", "error": "클러스터가 없어 건너뜀"})
+
+        await capture(
+            "단지 매물(예: 111515)",
             self._get_json(
-                "/cluster/ajax/articleList",
-                {
-                    "cortarNo": "1168010100",
-                    "rletTpCd": "APT",
-                    "tradTpCd": "A1",
-                    "z": 14,
-                    "lat": 37.5,
-                    "lon": 127.03,
-                    "btm": 37.475,
-                    "top": 37.525,
-                    "lft": 127.005,
-                    "rgt": 127.055,
-                    "page": 1,
-                },
+                "/complex/getComplexArticleList",
+                {"hscpNo": "111515", "tradTpCd": "A1", "order": "point_", "page": 1},
                 allow_non_json=True,
             ),
         )

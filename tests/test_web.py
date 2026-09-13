@@ -6,9 +6,12 @@ from noti.web import create_app
 
 # 모바일(m.land) 응답 모양
 REGION_TREE = {
-    "0000000000": [{"cortarNo": "1100000000", "cortarNm": "서울시", "lat": 37.56, "lon": 126.97}],
-    "1100000000": [{"cortarNo": "1168000000", "cortarNm": "강남구", "lat": 37.51, "lon": 127.04}],
-    "1168000000": [{"cortarNo": "1168010100", "cortarNm": "역삼동", "lat": 37.50, "lon": 127.03}],
+    "0000000000": [{"CortarNo": "1100000000", "CortarNm": "서울시", "MapYCrdn": "37.56",
+                    "MapXCrdn": "126.97"}],
+    "1100000000": [{"CortarNo": "1168000000", "CortarNm": "강남구", "MapYCrdn": "37.51",
+                    "MapXCrdn": "127.04"}],
+    "1168000000": [{"CortarNo": "1168010100", "CortarNm": "역삼동", "MapYCrdn": "37.50",
+                    "MapXCrdn": "127.03"}],
     "1168010100": [],
 }
 
@@ -35,6 +38,9 @@ def client(tmp_path, monkeypatch):
         async def fake_get_json(path, params, **kwargs):
             if path == "/map/getRegionList":
                 return {"result": {"list": REGION_TREE.get(str(params["cortarNo"]), [])}}
+            if path == "/cluster/clusterList":
+                return {"data": {"ARTICLE": [{"lgeo": "1101", "count": 2, "lat": 37.5,
+                                              "lon": 127.03}]}}
             return {"body": ARTICLES, "more": False}
 
         monkeypatch.setattr(app.state.client, "_get_json", fake_get_json)
