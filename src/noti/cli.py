@@ -44,6 +44,7 @@ async def _run(args: argparse.Namespace) -> int:
     notifier = build_notifier(settings, force_console=args.console)
 
     client = NaverLandClient(
+        auth_token=settings.naver_auth_token,
         timeout=settings.request_timeout_seconds,
         request_delay=settings.request_delay_seconds,
     )
@@ -76,16 +77,32 @@ async def _test_notify(args: argparse.Namespace) -> int:
     return 0
 
 
+TOKEN_HOWTO = """토큰 얻는 법 (2분):
+  1. 크롬에서 https://new.land.naver.com 접속
+  2. F12 → Network 탭 → 필터에 articles 입력
+  3. 지도에서 아무 지역이나 클릭 (api/articles... 요청이 뜬다)
+  4. 그 요청 클릭 → Request Headers 의 authorization 값 복사
+  5. .env 에 NOTI_NAVER_AUTH_TOKEN=eyJ... (앞의 Bearer 는 있어도 되고 없어도 됨)
+  6. docker compose up -d  (또는 systemctl restart noti)"""
+
+
 async def _doctor(args: argparse.Namespace) -> int:
     """네이버 접속·인증이 어디서 막히는지 점검한다."""
     settings = Settings()
-    client = NaverLandClient(timeout=settings.request_timeout_seconds)
+    client = NaverLandClient(
+        auth_token=settings.naver_auth_token, timeout=settings.request_timeout_seconds
+    )
     try:
         result = await client.probe()
     finally:
         await client.aclose()
 
-    print("== 토큰 발급 시도 ==")
+    print("== 네이버 토큰 ==")
+    print(
+        "  직접 설정한 토큰(NOTI_NAVER_AUTH_TOKEN): "
+        + ("있음" if result.get("manual_token") else "없음")
+    )
+    print("\n== 쿠키 핸드셰이크 ==")
     for attempt in result.get("handshake", []):
         if "error" in attempt:
             print(f"  {attempt['path']:<12} 오류: {attempt['error']}")
@@ -107,8 +124,12 @@ async def _doctor(args: argparse.Namespace) -> int:
         print(f"지역 목록 조회 성공: {result.get('regions_sample')}")
 
     if "articles_error" in result:
-        # 매물 목록만 실패하면 인증 헤더 문제일 가능성이 높다.
+        # 매물 목록만 실패하면 인증 토큰 문제다(지역 목록은 인증이 필요 없다).
         print(f"매물 목록 조회 실패: {result['articles_error']}")
+        print(
+            "\n매물 API 는 브라우저의 JS 가 만드는 Authorization 토큰을 요구합니다.\n"
+            + TOKEN_HOWTO
+        )
         return 1
 
     print(f"매물 목록 조회 성공: 역삼동 {result['articles_count']}건")
@@ -137,7 +158,9 @@ def _web(args: argparse.Namespace) -> int:
 
 async def _find_region(args: argparse.Namespace) -> int:
     settings = Settings()
-    client = NaverLandClient(timeout=settings.request_timeout_seconds)
+    client = NaverLandClient(
+        auth_token=settings.naver_auth_token, timeout=settings.request_timeout_seconds
+    )
     try:
         matches = await client.search_regions(" ".join(args.query))
     finally:
@@ -153,7 +176,9 @@ async def _find_region(args: argparse.Namespace) -> int:
 
 async def _regions(args: argparse.Namespace) -> int:
     settings = Settings()
-    client = NaverLandClient(timeout=settings.request_timeout_seconds)
+    client = NaverLandClient(
+        auth_token=settings.naver_auth_token, timeout=settings.request_timeout_seconds
+    )
     try:
         for region in await client.fetch_regions(args.cortar_no):
             print(f"{region.get('cortarNo')}\t{region.get('cortarName')}")

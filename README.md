@@ -22,6 +22,22 @@ noti once --console             # 조회/필터가 잘 되는지 1회 실행 (�
 noti run                        # 상시 감시
 ```
 
+### 네이버 토큰 준비 (필수)
+
+매물 목록 API 는 `Authorization: Bearer <JWT>` 를 요구합니다. 이 JWT 는 **페이지의 JS 가
+브라우저에서 만들어 붙이는 값**이라, 서버가 접속만 해서는 얻을 수 없습니다
+(`REALESTATE` 쿠키는 토큰이 아니라 날짜 문자열입니다). 그래서 한 번 복사해 넣어야 합니다.
+
+1. 크롬에서 <https://new.land.naver.com> 접속
+2. `F12` → **Network** 탭 → 필터에 `articles` 입력
+3. 지도에서 아무 지역이나 클릭 → `api/articles...` 요청이 뜹니다
+4. 그 요청 클릭 → **Request Headers** 의 `authorization` 값 복사
+5. `.env` 에 `NOTI_NAVER_AUTH_TOKEN=eyJ...` (앞의 `Bearer` 는 있어도 되고 없어도 됩니다)
+
+토큰은 시간이 지나면 만료됩니다. 만료되면 조회가 401 로 실패하고,
+**텔레그램으로 "토큰을 갱신하세요" 메시지가 한 번 갑니다.** 그때 위 과정을 다시 하면 됩니다.
+`noti doctor` 로 현재 토큰이 살아 있는지 언제든 확인할 수 있습니다.
+
 ### 텔레그램 준비
 
 1. 텔레그램에서 **@BotFather** 에게 `/newbot` → 봇 토큰 발급 → `NOTI_TELEGRAM_BOT_TOKEN`

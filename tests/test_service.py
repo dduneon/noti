@@ -176,3 +176,27 @@ async def test_target_scope_notifies_per_target(tmp_path):
     await service.run_once()
     assert [name for name, _ in notifier.sent] == ["강남구 전세", "역삼동 전세"]
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_alerts_once_and_stops_cycle(tmp_path):
+    """토큰 문제는 대상마다 반복해도 소용없으니 한 번만 알리고 멈춘다."""
+    from noti.sources import NaverAuthError
+
+    class FailingClient:
+        calls = 0
+
+        async def fetch_listings(self, target):
+            FailingClient.calls += 1
+            raise NaverAuthError("토큰이 거부됐습니다. NOTI_NAVER_AUTH_TOKEN 을 갱신하세요")
+
+    service, store, notifier = build_two_targets(tmp_path, [])
+    service._client = FailingClient()
+
+    await service.run_once()
+    await service.run_once()
+
+    assert FailingClient.calls == 2  # 사이클마다 1번씩, 두 번째 대상은 시도하지 않음
+    assert len(notifier.texts) == 1  # 알림은 한 번만
+    assert "NOTI_NAVER_AUTH_TOKEN" in notifier.texts[0]
+    store.close()

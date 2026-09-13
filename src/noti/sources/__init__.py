@@ -1,3 +1,3 @@
-from .naver import NaverLandClient, NaverLandError
+from .naver import NaverAuthError, NaverLandClient, NaverLandError
 
-__all__ = ["NaverLandClient", "NaverLandError"]
+__all__ = ["NaverAuthError", "NaverLandClient", "NaverLandError"]
