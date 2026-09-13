@@ -93,10 +93,13 @@ async def _doctor(args: argparse.Namespace) -> int:
                 return 1
             for sample in await client.dump_raw():
                 print(f"===== {sample['label']}  [{sample.get('status', '-')}] {sample.get('path')}")
-                print(f"  params: {sample.get('params')}")
+                if sample.get("params"):
+                    print(f"  params: {sample.get('params')}")
+                if sample.get("body") and sample.get("response") is not None:
+                    print(f"  요청 본문: {sample['body']}")
                 if sample.get("error"):
                     print(f"  오류: {sample['error']}")
-                print(sample.get("body") or "(빈 응답)")
+                print(sample.get("response") or sample.get("body") or "(빈 응답)")
                 print()
             return 0
         result = await client.probe()

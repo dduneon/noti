@@ -24,7 +24,12 @@ noti run                        # 상시 감시
 
 ### 네이버 접속 방식
 
-기본값은 **모바일 웹 엔드포인트(`m.land.naver.com`)** 이고, **토큰이 필요 없습니다.** 설정할 것도 없습니다.
+기본값은 **`fin.land.naver.com` 의 front-api** 이고, **토큰이 필요 없습니다.** 설정할 것도 없습니다.
+지도 화면이 쓰는 POST 엔드포인트를 같은 모양으로 호출하며, 로그인 쿠키는 보내지 않습니다.
+지역 코드·좌표는 아직 동작하는 `m.land` 의 `getRegionList` 를 씁니다.
+
+`NOTI_SOURCE` 로 소스를 바꿀 수 있습니다: `fin`(기본) / `mobile`(m.land — 현재 매물은 null) /
+`desktop`(new.land — 토큰 필요).
 
 데스크톱(`new.land.naver.com`)의 매물 API 는 페이지의 JS 가 브라우저에서 만들어 붙이는
 `Authorization: Bearer <JWT>` 를 요구합니다(로그인 자격증명이 아니라 방문자마다 발급되는 익명

@@ -102,9 +102,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
-    # 어느 엔드포인트를 쓸지. mobile 은 토큰이 필요 없어 기본값이다.
-    # desktop 은 new.land 의 API 로, 아래 naver_auth_token 이 있어야 동작한다.
-    source: Literal["mobile", "desktop"] = "mobile"
+    # 어느 엔드포인트를 쓸지.
+    #   fin    : 현재 웹(fin.land) front-api. 토큰 불필요 (기본값)
+    #   mobile : m.land 엔드포인트. 지역 목록만 살아 있고 매물은 null 을 준다
+    #   desktop: new.land API. naver_auth_token 이 있어야 동작
+    source: Literal["fin", "mobile", "desktop"] = "fin"
 
     # desktop 소스를 쓸 때만 필요한 Authorization 토큰(JWT).
     # 페이지의 JS 가 브라우저에서 만들어 붙이는 값이라 서버가 쿠키만으로는 얻을 수 없다.
