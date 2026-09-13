@@ -43,6 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.client = NaverLandClient(
+            auth_token=settings.naver_auth_token,
             timeout=settings.request_timeout_seconds,
             request_delay=settings.request_delay_seconds,
         )

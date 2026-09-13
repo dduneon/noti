@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from noti.sources import NaverLandClient, NaverLandError
-from noti.sources.naver import TOKEN_COOKIE
+from noti.sources.naver import TOKEN_COOKIE, _normalize_token
 
 
 def client_with(handler) -> NaverLandClient:
@@ -122,5 +122,51 @@ async def test_gives_up_after_refreshing_once():
         with pytest.raises(httpx.HTTPStatusError):
             await client._get_json("/api/articles", {})
         assert len(calls) == 4  # 후보 2개 × (최초 + 재발급 후) 1회씩
+    finally:
+        await client.aclose()
+
+
+def api_server(accepted_bearer: str):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/"):
+            if request.headers.get("Authorization") != accepted_bearer:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            return httpx.Response(200, json={"articleList": [{"articleNo": "1"}]})
+        return httpx.Response(200, headers={"Set-Cookie": f"{TOKEN_COOKIE}=Mon%20Sep%2014%202026"})
+
+    return handler
+
+
+def client_with_token(handler, token: str) -> NaverLandClient:
+    client = client_with(handler)
+    client.auth_token = _normalize_token(token)
+    return client
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    ["eyJhbGciOi.payload.sig", "Bearer eyJhbGciOi.payload.sig", '"eyJhbGciOi.payload.sig"'],
+)
+@pytest.mark.asyncio
+async def test_manual_token_is_normalized(supplied):
+    """Bearer 접두사나 따옴표를 붙여 복사해도 동작한다."""
+    client = client_with_token(api_server("Bearer eyJhbGciOi.payload.sig"), supplied)
+    try:
+        payload = await client._get_json("/api/articles", {"cortarNo": "1168010100"})
+        assert payload["articleList"]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_expired_manual_token_raises_auth_error():
+    """만료된 토큰이면 재시도 대신 갱신 안내를 담은 예외를 낸다."""
+    from noti.sources import NaverAuthError
+
+    client = client_with_token(api_server("Bearer valid"), "expired")
+    try:
+        with pytest.raises(NaverAuthError) as exc:
+            await client._get_json("/api/articles", {})
+        assert "NOTI_NAVER_AUTH_TOKEN" in str(exc.value)
     finally:
         await client.aclose()

@@ -12,7 +12,7 @@ from .config import Settings, Target, WatchConfig
 from .filters import matches
 from .models import Listing
 from .notifiers import Notifier
-from .sources import NaverLandClient, NaverLandError
+from .sources import NaverAuthError, NaverLandClient, NaverLandError
 from .store import GLOBAL_SCOPE, Store
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,21 @@ class MonitorService:
         self._store = store
         self._notifier = notifier
         self._config_mtime: float | None = None
+        self._auth_alert_sent = False
+
+    async def _alert_auth_failure(self, exc: Exception) -> None:
+        """토큰 갱신이 필요하다는 걸 텔레그램으로 한 번 알린다(프로세스당 1회)."""
+        if self._auth_alert_sent:
+            return
+        self._auth_alert_sent = True
+        try:
+            await self._notifier.send_text(
+                "⚠️ 네이버 매물 조회가 인증 오류로 실패하고 있습니다.\n"
+                f"{exc}\n"
+                "새 토큰으로 NOTI_NAVER_AUTH_TOKEN 을 갱신해 주세요."
+            )
+        except Exception:
+            logger.exception("인증 실패 알림 전송에 실패했습니다")
 
     def _reload_config_if_changed(self) -> None:
         """설정 페이지에서 저장한 내용을 재시작 없이 반영한다."""
@@ -82,6 +97,11 @@ class MonitorService:
                 await asyncio.sleep(self._settings.request_delay_seconds)
             try:
                 notified.extend(await self._process_target(target))
+            except NaverAuthError as exc:
+                # 토큰 문제는 대상마다 반복해도 소용없다. 한 번 알리고 이번 사이클은 중단.
+                logger.error("네이버 인증 실패: %s", exc)
+                await self._alert_auth_failure(exc)
+                break
             except (NaverLandError, httpx.HTTPError, OSError) as exc:
                 logger.warning("target=%s 조회 실패: %s", target.name, exc)
             except Exception:
@@ -97,6 +117,7 @@ class MonitorService:
     async def _process_target(self, target: Target) -> list[Listing]:
         scope = self._dedupe_scope or target.name
         listings = await self._client.fetch_listings(target)
+        self._auth_alert_sent = False  # 한 번이라도 성공하면 다음 실패 때 다시 알린다
         matched = [listing for listing in listings if matches(listing, target.criteria)]
         fresh = self._store.filter_new(
             scope,

@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
+    # 네이버 매물 API 용 Authorization 토큰(JWT). 브라우저 개발자도구에서 복사한다.
+    # 페이지의 JS 가 만들어 붙이는 값이라 서버가 쿠키만으로는 얻을 수 없다.
+    naver_auth_token: str | None = None
+
     config_path: Path = Path("config.yaml")
     db_path: Path = Path("noti.db")
 

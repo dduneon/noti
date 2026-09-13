@@ -51,6 +51,16 @@ BROWSER_HEADERS = {
 }
 
 
+def _normalize_token(token: str | None) -> str | None:
+    """'Bearer eyJ...' 로 복사해 붙여도 되도록 접두사와 따옴표를 정리한다."""
+    if not token:
+        return None
+    value = unquote(token).strip().strip("'\"")
+    if value.lower().startswith("bearer "):
+        value = value[len("Bearer ") :].strip()
+    return value or None
+
+
 def _auth_candidates(token: str) -> list[str]:
     """쿠키 값에서 만들 수 있는 Authorization 헤더 후보들(중복 제거)."""
     decoded = unquote(token).strip()
@@ -74,15 +84,27 @@ class NaverLandError(RuntimeError):
     """네이버 응답이 실패했거나 예상과 다를 때."""
 
 
+class NaverAuthError(NaverLandError):
+    """매물 API 인증(Authorization 토큰)이 거부됐을 때."""
+
+
 class NaverLandClient:
     """매물 목록 조회 클라이언트.
 
-    인증: new.land.naver.com 에 한 번 접속하면 `REALESTATE` 쿠키(JWT)가 내려오고,
-    API 호출 시 이 값을 `Authorization: Bearer <jwt>` 로 넣어야 한다.
-    토큰이 만료되면 401/403 이 오므로 한 번 재발급 후 재시도한다.
+    인증: 매물 목록 API 는 `Authorization: Bearer <JWT>` 를 요구한다. 이 JWT 는
+    페이지의 JS 가 브라우저에서 만들어 붙이는 값이라 서버에서 쿠키만 받아서는 얻을 수 없다
+    (REALESTATE 쿠키는 JWT 가 아니라 날짜 문자열이다).
+    그래서 사용자가 브라우저 개발자도구에서 복사한 토큰(NOTI_NAVER_AUTH_TOKEN)을 쓴다.
+    지역 목록처럼 인증이 필요 없는 엔드포인트는 토큰 없이도 동작한다.
     """
 
-    def __init__(self, *, timeout: float = 10.0, request_delay: float = 1.0) -> None:
+    def __init__(
+        self,
+        *,
+        auth_token: str | None = None,
+        timeout: float = 10.0,
+        request_delay: float = 1.0,
+    ) -> None:
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers=dict(BROWSER_HEADERS),
@@ -93,6 +115,7 @@ class NaverLandClient:
         self._region_cache: dict[str, list[dict]] = {}
         self.last_handshake: list[dict[str, object]] = []  # noti doctor 용 기록
         self._auth_index = 0  # 어떤 Authorization 표기가 통했는지 기억
+        self.auth_token = _normalize_token(auth_token)
 
     async def __aenter__(self) -> Self:
         return self
@@ -153,6 +176,9 @@ class NaverLandClient:
         `Bearer Bearer%20eyJ...` 가 되어 401 이 난다. 그래서 통하는 표기를 찾아 기억한다.
         """
         url = f"{BASE_URL}{path}"
+        if self.auth_token:
+            return await self._request_with_token(url, params, self.auth_token)
+
         token = await self._ensure_token()
         refreshed = False
 
@@ -176,6 +202,21 @@ class NaverLandClient:
             refreshed = True
 
         return response  # 마지막 401/403 응답. 호출부에서 raise_for_status 로 처리
+
+    async def _request_with_token(
+        self, url: str, params: dict[str, str | int], token: str
+    ) -> httpx.Response:
+        """직접 설정한 토큰으로 한 번만 요청한다. 만료되면 사용자가 갱신해야 한다."""
+        response = await self._client.get(
+            url, params=params, headers={**API_HEADERS, "Authorization": f"Bearer {token}"}
+        )
+        if response.status_code in (401, 403):
+            raise NaverAuthError(
+                "설정한 네이버 토큰이 거부됐습니다(만료됐을 수 있습니다). "
+                "브라우저에서 새 토큰을 복사해 NOTI_NAVER_AUTH_TOKEN 을 갱신하세요 "
+                "— 자세한 방법은 `noti doctor` 또는 README 참고."
+            )
+        return response
 
     async def fetch_listings(self, target: Target) -> list[Listing]:
         """대상(단지/지역)의 매물을 모아서 반환한다.
@@ -283,7 +324,7 @@ class NaverLandClient:
 
         네이버가 내부 API 를 바꾸면 여기 결과만 보고도 어디서 깨졌는지 알 수 있다.
         """
-        result: dict[str, object] = {}
+        result: dict[str, object] = {"manual_token": bool(self.auth_token)}
         try:
             token = await self._ensure_token(force=True)
             result["token"] = f"{token[:12]}…({len(token)}자)"
@@ -293,7 +334,11 @@ class NaverLandClient:
         if "token" not in result:
             return result
 
-        result["auth_header"] = f"{_auth_candidates(await self._ensure_token())[self._auth_index][:20]}…"
+        if self.auth_token:
+            result["auth_header"] = f"Bearer {self.auth_token[:16]}… (직접 설정한 토큰)"
+        else:
+            candidates = _auth_candidates(await self._ensure_token())
+            result["auth_header"] = f"{candidates[self._auth_index][:24]}… (쿠키에서 추출)"
 
         try:
             regions = await self.fetch_regions(ROOT_CORTAR_NO)
