@@ -99,10 +99,19 @@ async def _doctor(args: argparse.Namespace) -> int:
         return 1
 
     print(f"\n토큰: {result['token']}")
+    print(f"Authorization: {result.get('auth_header')}")
+
     if "regions_error" in result:
-        print(f"지역 목록 조회 실패: {result['regions_error']}")
+        print(f"지역 목록(인증 불필요) 조회 실패: {result['regions_error']}")
+    else:
+        print(f"지역 목록 조회 성공: {result.get('regions_sample')}")
+
+    if "articles_error" in result:
+        # 매물 목록만 실패하면 인증 헤더 문제일 가능성이 높다.
+        print(f"매물 목록 조회 실패: {result['articles_error']}")
         return 1
-    print(f"지역 목록 조회 성공: {result.get('regions_sample')}")
+
+    print(f"매물 목록 조회 성공: 역삼동 {result['articles_count']}건")
     print("\n정상입니다.")
     return 0
 

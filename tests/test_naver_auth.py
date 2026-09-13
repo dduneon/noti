@@ -68,3 +68,59 @@ async def test_probe_reports_token_and_regions():
         assert result["regions_sample"] == ["서울시"]
     finally:
         await client.aclose()
+
+
+def token_server(accepted: str):
+    """accepted 와 정확히 일치하는 Authorization 만 통과시키는 가짜 서버."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/"):
+            if request.headers.get("Authorization") != accepted:
+                return httpx.Response(401, json={"error": "unauthorized"})
+            return httpx.Response(200, json={"articleList": [{"articleNo": "1"}]})
+        # URL 인코딩된 'Bearer%20<jwt>' 형태로 쿠키를 내려준다
+        return httpx.Response(200, headers={"Set-Cookie": f"{TOKEN_COOKIE}=Bearer%20jwt-value"})
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_bearer_prefix_in_cookie_is_not_doubled():
+    """쿠키가 'Bearer%20eyJ...' 여도 Authorization 은 'Bearer eyJ...' 여야 한다."""
+    client = client_with(token_server("Bearer jwt-value"))
+    try:
+        payload = await client._get_json("/api/articles", {"cortarNo": "1168010100"})
+        assert payload["articleList"]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_raw_cookie_form():
+    """서버가 쿠키 원문 표기를 요구하면 그쪽으로 넘어간다."""
+    client = client_with(token_server("Bearer%20jwt-value"))
+    try:
+        payload = await client._get_json("/api/articles", {"cortarNo": "1168010100"})
+        assert payload["articleList"]
+        assert client._auth_index != 0  # 통한 표기를 기억한다
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_gives_up_after_refreshing_once():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/"):
+            calls.append(request.headers.get("Authorization"))
+            return httpx.Response(401, json={"error": "nope"})
+        return httpx.Response(200, headers={"Set-Cookie": f"{TOKEN_COOKIE}=jwt"})
+
+    client = client_with(handler)
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client._get_json("/api/articles", {})
+        assert len(calls) == 4  # 후보 2개 × (최초 + 재발급 후) 1회씩
+    finally:
+        await client.aclose()
