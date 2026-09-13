@@ -7,11 +7,16 @@ from noti.config import Target
 from noti.sources import NaverMobileClient
 
 REGIONS = {
-    "0000000000": [{"cortarNo": "1100000000", "cortarNm": "서울시", "lat": 37.56, "lon": 126.97}],
-    "1100000000": [{"cortarNo": "1168000000", "cortarNm": "강남구", "lat": 37.51, "lon": 127.04}],
+    # 실제 응답 필드명(CortarNo/CortarNm/MapXCrdn/MapYCrdn)
+    "0000000000": [{"CortarNo": "1100000000", "CortarNm": "서울시", "MapYCrdn": "37.566427",
+                    "MapXCrdn": "126.977872"}],
+    "1100000000": [{"CortarNo": "1168000000", "CortarNm": "강남구", "MapYCrdn": "37.51",
+                    "MapXCrdn": "127.04"}],
     "1168000000": [
-        {"cortarNo": "1168010100", "cortarNm": "역삼동", "lat": 37.50, "lon": 127.03},
-        {"cortarNo": "1168010300", "cortarNm": "청담동", "lat": 37.52, "lon": 127.05},
+        {"CortarNo": "1168010100", "CortarNm": "역삼동", "MapYCrdn": "37.499776",
+         "MapXCrdn": "127.03895"},
+        {"CortarNo": "1168010300", "CortarNm": "청담동", "MapYCrdn": "37.525492",
+         "MapXCrdn": "127.05235"},
     ],
     "1168010100": [],
 }
@@ -34,7 +39,16 @@ def make_client(recorder: list | None = None) -> NaverMobileClient:
         if path == "/map/getRegionList":
             cortar_no = request.url.params["cortarNo"]
             return httpx.Response(200, json={"result": {"list": REGIONS.get(cortar_no, [])}})
+        if path == "/cluster/clusterList":
+            return httpx.Response(
+                200,
+                json={"data": {"ARTICLE": [{"lgeo": "1101110", "count": 12, "lat": 37.5,
+                                            "lon": 127.03}]}},
+            )
         if path == "/cluster/ajax/articleList":
+            # lgeo 없이 부르면 네이버가 null 을 준다
+            if not request.url.params.get("lgeo"):
+                return httpx.Response(200, json=None)
             return httpx.Response(200, json={"body": REGION_ARTICLES, "more": False})
         if path == "/complex/getComplexArticleList":
             return httpx.Response(
@@ -61,18 +75,23 @@ async def test_region_listings_need_no_token():
         await client.aclose()
 
 
-async def test_region_query_carries_map_bounds():
-    """지도 기반 API 라 동 중심 좌표에서 범위를 만들어 넘긴다."""
+async def test_region_query_uses_cluster_then_articles():
+    """clusterList 로 lgeo 를 얻은 뒤 그 클러스터의 매물을 가져온다."""
     requests: list = []
     client = make_client(requests)
     try:
         target = Target(name="역삼동", kind="region", cortar_no="1168010100", max_pages=1)
         await client.fetch_listings(target)
+        paths = [u.path for u in requests]
+        assert paths.index("/cluster/clusterList") < paths.index("/cluster/ajax/articleList")
+
+        cluster_url = next(u for u in requests if u.path == "/cluster/clusterList")
+        assert float(cluster_url.params["btm"]) < 37.499776 < float(cluster_url.params["top"])
+        assert cluster_url.params["cortarNo"] == "1168010100"
+
         article_url = next(u for u in requests if u.path == "/cluster/ajax/articleList")
-        params = article_url.params
-        assert float(params["btm"]) < 37.50 < float(params["top"])
-        assert float(params["lft"]) < 127.03 < float(params["rgt"])
-        assert params["cortarNo"] == "1168010100"
+        assert article_url.params["lgeo"] == "1101110"
+        assert article_url.params["totCnt"] == "12"
     finally:
         await client.aclose()
 
