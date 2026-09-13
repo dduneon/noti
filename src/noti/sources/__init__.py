@@ -2,10 +2,12 @@
 
 from ..config import Settings
 from .naver import NaverAuthError, NaverLandClient, NaverLandError
+from .naver_fin import NaverFinClient
 from .naver_mobile import NaverMobileClient
 
 __all__ = [
     "NaverAuthError",
+    "NaverFinClient",
     "NaverLandClient",
     "NaverLandError",
     "NaverMobileClient",
@@ -13,8 +15,13 @@ __all__ = [
 ]
 
 
-def create_client(settings: Settings) -> NaverLandClient | NaverMobileClient:
+def create_client(settings: Settings) -> NaverFinClient | NaverLandClient | NaverMobileClient:
     """설정에 맞는 클라이언트를 만든다."""
+    if settings.source == "fin":
+        return NaverFinClient(
+            timeout=settings.request_timeout_seconds,
+            request_delay=settings.request_delay_seconds,
+        )
     if settings.source == "desktop":
         return NaverLandClient(
             auth_token=settings.naver_auth_token,

@@ -30,6 +30,7 @@ def client(tmp_path, monkeypatch):
         db_path=tmp_path / "noti.db",
         telegram_bot_token=None,
         telegram_chat_id=None,
+        source="mobile",  # 이 테스트는 m.land 응답 모양을 가정한다
     )
     WatchConfig(targets=[]).save(settings.config_path)
     app = create_app(settings)
