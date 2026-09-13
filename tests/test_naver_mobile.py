@@ -75,23 +75,49 @@ async def test_region_listings_need_no_token():
         await client.aclose()
 
 
-async def test_region_query_uses_cluster_then_articles():
-    """clusterList 로 lgeo 를 얻은 뒤 그 클러스터의 매물을 가져온다."""
+async def test_direct_article_list_is_preferred():
+    """articleList 가 바로 응답하면 클러스터 단계 없이 끝낸다."""
+    requests: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url)
+        if request.url.path == "/map/getRegionList":
+            return httpx.Response(
+                200, json={"result": {"list": REGIONS.get(request.url.params["cortarNo"], [])}}
+            )
+        if request.url.path == "/cluster/ajax/articleList":
+            return httpx.Response(200, json={"body": REGION_ARTICLES, "more": False})
+        return httpx.Response(200, json=None)
+
+    client = NaverMobileClient(request_delay=0)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="")
+    try:
+        target = Target(name="역삼동", kind="region", cortar_no="1168010100", max_pages=1)
+        listings = await client.fetch_listings(target)
+        assert [x.article_no for x in listings] == ["1"]
+        assert "/cluster/clusterList" not in [u.path for u in requests]
+
+        article_url = next(u for u in requests if u.path == "/cluster/ajax/articleList")
+        params = article_url.params
+        assert params["totCnt"] and params["showR0"] == ""  # 이게 없으면 null 이 온다
+        assert float(params["btm"]) < 37.499776 < float(params["top"])
+    finally:
+        await client.aclose()
+
+
+async def test_falls_back_to_cluster_when_direct_returns_null():
+    """직접 호출이 null 이면 클러스터(lgeo) 경유로 재시도한다."""
     requests: list = []
     client = make_client(requests)
     try:
         target = Target(name="역삼동", kind="region", cortar_no="1168010100", max_pages=1)
-        await client.fetch_listings(target)
+        listings = await client.fetch_listings(target)
+        assert [x.article_no for x in listings] == ["1"]
+
         paths = [u.path for u in requests]
-        assert paths.index("/cluster/clusterList") < paths.index("/cluster/ajax/articleList")
-
-        cluster_url = next(u for u in requests if u.path == "/cluster/clusterList")
-        assert float(cluster_url.params["btm"]) < 37.499776 < float(cluster_url.params["top"])
-        assert cluster_url.params["cortarNo"] == "1168010100"
-
-        article_url = next(u for u in requests if u.path == "/cluster/ajax/articleList")
-        assert article_url.params["lgeo"] == "1101110"
-        assert article_url.params["totCnt"] == "12"
+        assert "/cluster/clusterList" in paths
+        cluster_call = next(u for u in requests if u.path == "/cluster/clusterList")
+        assert cluster_call.params["cortarNo"] == "1168010100"
     finally:
         await client.aclose()
 
@@ -173,8 +199,9 @@ async def test_dump_raw_compares_variants():
     try:
         samples = await client.dump_raw()
         labels = [s["label"] for s in samples]
-        assert any("클러스터 A" in label for label in labels)
-        assert any("클러스터 B" in label for label in labels)
+        assert any("매물 직접조회 z=14" in label for label in labels)
+        assert any("매물 직접조회 z=19" in label for label in labels)
+        assert any("클러스터" == label for label in labels)
         assert all("status" in s or "error" in s for s in samples)
     finally:
         await client.aclose()
