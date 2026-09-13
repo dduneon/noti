@@ -72,9 +72,16 @@ class WatchConfig(BaseModel):
                 target.read_text(encoding="utf-8"), encoding="utf-8"
             )
 
+        content = self.to_yaml()
         tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(self.to_yaml(), encoding="utf-8")
-        tmp.replace(target)
+        tmp.write_text(content, encoding="utf-8")
+        try:
+            tmp.replace(target)
+        except OSError:
+            # 설정 파일을 단일 파일로 bind mount 하면(도커) 그 경로가 마운트 지점이라
+            # rename 이 EBUSY 로 실패한다. 이때는 제자리에 덮어쓴다.
+            target.write_text(content, encoding="utf-8")
+            tmp.unlink(missing_ok=True)
 
     def to_yaml(self) -> str:
         return yaml.safe_dump(

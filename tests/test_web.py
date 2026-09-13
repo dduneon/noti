@@ -131,3 +131,18 @@ def test_index_page_served(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "noti 설정" in response.text
+
+
+def test_save_falls_back_when_rename_is_blocked(client, monkeypatch):
+    """단일 파일 bind mount(도커)에서는 rename 이 EBUSY 로 실패한다."""
+    from pathlib import Path
+
+    def blocked_replace(self, target):
+        raise OSError(16, "Device or resource busy")
+
+    monkeypatch.setattr(Path, "replace", blocked_replace)
+    response = client.put("/api/config", json={"targets": [region_target(name="덮어쓰기")]})
+
+    assert response.status_code == 200
+    assert "덮어쓰기" in client.settings.config_path.read_text(encoding="utf-8")
+    assert not client.settings.config_path.with_suffix(".yaml.tmp").exists()
