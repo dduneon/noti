@@ -1,0 +1,25 @@
+# /etc/systemd/system/noti-web.service — 설정 페이지
+# 인증이 없으므로 반드시 루프백에만 바인딩하고 SSH 터널로 접속한다.
+[Unit]
+Description=noti 설정 페이지
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=noti
+Group=noti
+WorkingDirectory=/opt/noti
+EnvironmentFile=/opt/noti/.env
+ExecStart=/opt/noti/.venv/bin/noti web --host 127.0.0.1 --port 8765
+Restart=always
+RestartSec=10s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/noti
+
+[Install]
+WantedBy=multi-user.target

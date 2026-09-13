@@ -108,17 +108,65 @@ noti regions 1168000000            # 강남구 하위 동 전체 나열
 - **호출 예의**: 기본 주기 5분 + 0~30초 랜덤 지터, 페이지/대상 사이 1초 간격. 한 사이클 최대 20건까지만 전송합니다. 주기를 무리하게 줄이지 마세요.
 - **실패 내성**: 한 대상의 조회가 실패해도 다른 대상은 계속 처리하고, 다음 주기에 재시도합니다.
 
-## 상시 실행
+## 서버에 올리기
+
+24시간 돌아야 알림이 의미가 있으니, 노트북 말고 항상 켜져 있는 곳에 올리세요.
+CPU·메모리를 거의 쓰지 않아 **라즈베리파이나 가장 싼 VPS로 충분**합니다.
+
+### 방법 A. systemd (우분투/데비안 서버, 라즈베리파이)
 
 ```bash
-docker compose up -d --build     # 감시 루프 + 설정 페이지(127.0.0.1:8765)
+sudo ./deploy/install.sh          # /opt/noti 에 설치 + 유닛 등록
+sudo -u noti nano /opt/noti/.env  # 텔레그램 토큰/챗ID
+sudo systemctl enable --now noti noti-web
+sudo journalctl -u noti -f        # 로그 확인
+```
+
+- `noti.service` 는 감시 루프, `noti-web.service` 는 설정 페이지입니다(`deploy/` 참고).
+- 설정 페이지는 **127.0.0.1 에만** 바인딩됩니다. 접속은 SSH 터널로:
+  ```bash
+  ssh -L 8765:127.0.0.1:8765 <서버>   # 이후 브라우저에서 http://127.0.0.1:8765
+  ```
+- 코드를 업데이트했으면: `sudo ./deploy/install.sh && sudo systemctl restart noti noti-web`
+  (조건만 바꿨다면 재시작 불필요 — 루프가 알아서 다시 읽습니다.)
+
+### 방법 B. Docker
+
+```bash
+git clone <repo> noti && cd noti
+cp .env.example .env && cp config.example.yaml config.yaml
+docker compose up -d --build
 docker compose logs -f
 ```
 
-compose 는 컨테이너 두 개를 띄웁니다: 감시 루프(`noti run`)와 설정 페이지(`noti web`).
-둘은 같은 `config.yaml` 을 공유하고, 페이지에서 저장하면 루프가 다음 사이클에 반영합니다.
+감시 루프와 설정 페이지 컨테이너가 뜹니다. 페이지는 `127.0.0.1:8765` 로만 노출되니
+원격 서버라면 역시 SSH 터널로 접속하세요. DB 는 `noti-data` 볼륨에 남아 재시작해도
+"이미 알린 매물" 기록이 유지됩니다.
 
-systemd 를 쓴다면 `ExecStart=/opt/noti/.venv/bin/noti run` 에 `Restart=always` 정도면 충분합니다.
+### 방법 C. cron 으로 주기 실행 (상주 프로세스가 싫다면)
+
+```cron
+*/10 * * * * cd /opt/noti && set -a && . ./.env && set +a && .venv/bin/noti once >> /var/log/noti.log 2>&1
+```
+
+`once` 는 한 사이클만 돌고 끝납니다. 중복 판단은 `noti.db` 파일이 하므로
+**DB 경로가 매번 같은 곳을 가리키게** 두세요(컨테이너면 볼륨 필수).
+
+### 어디에 둘까
+
+| 선택지 | 비고 |
+| --- | --- |
+| 라즈베리파이 / 집 NAS | 전기값만 듦. 국내 가정용 IP라 가장 무난 |
+| 국내 VPS (네이버클라우드, 카페24 등) | 월 몇천 원대로 충분 |
+| 해외 VPS·클라우드 무료 티어 | 되긴 하지만 해외 IP는 차단·캡차 가능성이 상대적으로 높습니다. 쓰려면 먼저 `noti once --console` 로 조회가 되는지 확인하세요 |
+
+### 운영 체크리스트
+
+- `.env` 에 봇 토큰이 들어갑니다. `chmod 600`, 저장소에 커밋 금지(`.gitignore` 에 이미 있음).
+- 설정 페이지는 **인증이 없습니다.** 공인 IP·0.0.0.0 바인딩 금지, 리버스 프록시로 열 거면 최소한 basic auth 를 두세요.
+- 네이버 응답 형식이 바뀌면 조회가 0건이 되고 로그에 경고가 남습니다. 며칠째 알림이 없으면
+  `journalctl -u noti | tail` 로 실패가 쌓이는지 먼저 확인하세요.
+- 폴링 주기를 무리하게 줄이지 마세요. 넓은 지역을 볼수록 주기를 늘리는 게 맞습니다.
 
 ## 알아둘 점 (중요)
 

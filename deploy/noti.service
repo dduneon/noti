@@ -1,0 +1,27 @@
+# /etc/systemd/system/noti.service — 감시 루프
+[Unit]
+Description=noti - 네이버 부동산 조건 매물 알림
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=noti
+Group=noti
+WorkingDirectory=/opt/noti
+EnvironmentFile=/opt/noti/.env
+ExecStart=/opt/noti/.venv/bin/noti run
+Restart=always
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+
+# 최소 권한으로 실행
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/noti
+
+[Install]
+WantedBy=multi-user.target
