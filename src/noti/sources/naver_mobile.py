@@ -409,7 +409,15 @@ class NaverMobileClient:
             return result
 
         target = Target(name="점검", kind="region", cortar_no="1168010100", max_pages=1)
+        center = await self._region_center("1168010100")
         try:
+            # 클러스터 단계와 매물 단계를 나눠서 어디가 비었는지 알 수 있게 한다.
+            clusters = (
+                await self._cluster_list("1168010100", target, center, _bounds(*center))
+                if center
+                else []
+            )
+            result["clusters"] = len(clusters)
             listings = await self.fetch_listings(target)
             result["articles_count"] = len(listings)
             result["articles_sample"] = [x.summary() for x in listings[:2]]
