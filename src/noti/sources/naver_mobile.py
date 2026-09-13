@@ -82,7 +82,15 @@ class NaverMobileClient:
                 return {}
             raise NaverLandError(f"{path} 응답을 JSON 으로 파싱하지 못했습니다") from exc
 
-        if isinstance(payload, dict) and payload.get("code") not in (None, "success", 200, "200"):
+        if payload is None:
+            # 파라미터가 부족하면 네이버가 본문 없이 null 을 준다. 빈 결과로 취급한다.
+            logger.debug("%s 가 null 을 반환했습니다 (params=%s)", path, params)
+            return {}
+        if isinstance(payload, list):
+            return {"body": payload}
+        if not isinstance(payload, dict):
+            return {}
+        if payload.get("code") not in (None, "success", 200, "200"):
             raise NaverLandError(f"{path} 응답 코드가 정상이 아닙니다: {payload.get('code')}")
         return payload
 
@@ -324,49 +332,71 @@ class NaverMobileClient:
     async def dump_raw(self) -> list[dict[str, object]]:
         """응답 원문을 그대로 모아 돌려준다(doctor --raw).
 
-        필드명이 바뀌었을 때 무엇을 보고 매핑해야 하는지 알려면 원문이 필요하다.
+        클러스터 API 는 파라미터 조합에 민감해 null 을 주기 쉽다. 그래서 몇 가지
+        변형을 한 번에 호출해 어느 조합이 데이터를 주는지 비교할 수 있게 한다.
         """
-        samples: list[dict[str, object]] = []
+        lat, lon = 37.499776, 127.03895  # 역삼동
+        bounds = _bounds(lat, lon)
+        map_referer = {"Referer": f"{BASE_URL}/map/{lat}:{lon}:{ZOOM}"}
+        base = {
+            "view": "atcl",
+            "rletTpCd": "APT",
+            "tradTpCd": "A1",
+            "lat": lat,
+            "lon": lon,
+            **bounds,
+            "pCortarNo": "",
+            "addon": "COMPLEX",
+            "bAddon": "COMPLEX",
+            "isOnlyIsale": "false",
+        }
 
-        async def capture(label: str, coro) -> None:
-            try:
-                await coro
-            except (NaverLandError, httpx.HTTPError, OSError) as exc:  # 실패해도 원문은 남긴다
-                samples.append({"label": label, "error": f"{type(exc).__name__}: {exc}", **self.last_raw})
-            else:
-                samples.append({"label": label, **self.last_raw})
-
-        await capture("시/도 목록", self._get_json("/map/getRegionList", {"cortarNo": ROOT_CORTAR_NO}, allow_non_json=True))
-        await capture("강남구 하위 동", self._get_json("/map/getRegionList", {"cortarNo": "1168000000"}, allow_non_json=True))
-        target = Target(name="점검", kind="region", cortar_no="1168010100", max_pages=1)
-        bounds = _bounds(37.499776, 127.03895)
-
-        await capture(
-            "역삼동 클러스터",
-            self._cluster_list("1168010100", target, (37.499776, 127.03895), bounds),
-        )
-        # 클러스터를 하나 얻었으면 그 안의 매물 원문까지 본다.
-        clusters = []
-        try:
-            clusters = await self._cluster_list(
-                "1168010100", target, (37.499776, 127.03895), bounds
-            )
-        except (NaverLandError, httpx.HTTPError, OSError):
-            pass
-        if clusters:
-            await capture("역삼동 매물", self._cluster_articles(clusters[0], target, bounds))
-        else:
-            samples.append({"label": "역삼동 매물", "error": "클러스터가 없어 건너뜀"})
-
-        await capture(
-            "단지 매물(예: 111515)",
-            self._get_json(
+        samples = [
+            await self._raw_get("지역 목록", "/map/getRegionList", {"cortarNo": "1168000000"}),
+            await self._raw_get(
+                "클러스터 A (z=14, cortarNo 있음)",
+                "/cluster/clusterList",
+                {**base, "z": 14, "cortarNo": "1168010100"},
+            ),
+            await self._raw_get(
+                "클러스터 B (z=13, cortarNo 없음)",
+                "/cluster/clusterList",
+                {**base, "z": 13, "cortarNo": ""},
+            ),
+            await self._raw_get(
+                "클러스터 C (지도 Referer)",
+                "/cluster/clusterList",
+                {**base, "z": 13, "cortarNo": "1168010100"},
+                headers=map_referer,
+            ),
+            await self._raw_get(
+                "단지 매물 (hscpNo=111515)",
                 "/complex/getComplexArticleList",
                 {"hscpNo": "111515", "tradTpCd": "A1", "order": "point_", "page": 1},
-                allow_non_json=True,
             ),
-        )
+        ]
         return samples
+
+    async def _raw_get(
+        self,
+        label: str,
+        path: str,
+        params: dict[str, str | int],
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        try:
+            response = await self._client.get(
+                f"{BASE_URL}{path}", params=params, headers=headers
+            )
+            return {
+                "label": label,
+                "path": path,
+                "params": params,
+                "status": response.status_code,
+                "body": response.text[:1200],
+            }
+        except (httpx.HTTPError, OSError) as exc:
+            return {"label": label, "path": path, "params": params, "error": str(exc)}
 
     async def probe(self) -> dict[str, object]:
         """noti doctor 용 점검(토큰이 필요 없으므로 조회만 확인한다)."""

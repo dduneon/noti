@@ -145,3 +145,36 @@ async def test_error_code_is_reported():
             await client.fetch_regions("0000000000")
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_null_payload_does_not_crash():
+    """파라미터가 부족하면 네이버가 null 을 준다. 빈 결과로 넘어가야 한다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/map/getRegionList":
+            return httpx.Response(200, json={"result": {"list": REGIONS.get(
+                request.url.params["cortarNo"], [])}})
+        return httpx.Response(200, json=None)  # clusterList 가 null
+
+    client = NaverMobileClient(request_delay=0)
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="")
+    try:
+        target = Target(name="역삼동", kind="region", cortar_no="1168010100", max_pages=1)
+        assert await client.fetch_listings(target) == []
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_dump_raw_compares_variants():
+    """어떤 파라미터 조합이 데이터를 주는지 한 번에 비교할 수 있어야 한다."""
+    client = make_client()
+    try:
+        samples = await client.dump_raw()
+        labels = [s["label"] for s in samples]
+        assert any("클러스터 A" in label for label in labels)
+        assert any("클러스터 B" in label for label in labels)
+        assert all("status" in s or "error" in s for s in samples)
+    finally:
+        await client.aclose()
