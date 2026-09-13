@@ -22,7 +22,7 @@ REGION_TREE = {
 def client(monkeypatch):
     client = NaverLandClient(request_delay=0)
 
-    async def fake_get_json(path, params):
+    async def fake_get_json(path, params, **kwargs):
         if path == "/api/regions/list":
             return {"regionList": REGION_TREE.get(str(params["cortarNo"]), [])}
         return {"articleList": [], "isMoreData": False}

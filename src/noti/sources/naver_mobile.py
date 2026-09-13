@@ -14,7 +14,7 @@ from typing import Self
 import httpx
 
 from ..config import Target
-from ..models import Listing
+from ..models import Listing, pick
 from .naver import NaverLandError
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ class NaverMobileClient:
         self._request_delay = request_delay
         self._region_cache: dict[str, list[dict]] = {}
         self.auth_token = None  # 인터페이스 호환용(모바일은 토큰이 필요 없다)
+        self.last_raw: dict[str, object] = {}  # doctor --raw 용 마지막 응답
 
     async def __aenter__(self) -> Self:
         return self
@@ -55,12 +56,19 @@ class NaverMobileClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _get_json(self, path: str, params: dict[str, str | int]) -> dict:
+    async def _get_json(
+        self, path: str, params: dict[str, str | int], *, allow_non_json: bool = False
+    ) -> dict:
         response = await self._client.get(f"{BASE_URL}{path}", params=params)
         response.raise_for_status()
+        self.last_raw = {"path": path, "params": dict(params), "body": response.text[:1500]}
         try:
             payload = response.json()
         except ValueError as exc:
+            if allow_non_json:
+                # 더 이상 하위 지역이 없는 동을 조회하면 JSON 이 아닌 응답이 오기도 한다.
+                logger.debug("%s 응답이 JSON 이 아닙니다(무시): %s", path, response.text[:120])
+                return {}
             raise NaverLandError(f"{path} 응답을 JSON 으로 파싱하지 못했습니다") from exc
 
         if isinstance(payload, dict) and payload.get("code") not in (None, "success", 200, "200"):
@@ -71,18 +79,32 @@ class NaverMobileClient:
 
     async def fetch_regions(self, cortar_no: str) -> list[dict]:
         """하위 지역 목록. 데스크톱 응답과 같은 모양으로 맞춰 돌려준다."""
-        payload = await self._get_json("/map/getRegionList", {"cortarNo": cortar_no})
-        regions = (payload.get("result") or {}).get("list") or payload.get("regionList") or []
-        return [
-            {
-                "cortarNo": str(region.get("cortarNo") or region.get("CortarNo") or ""),
-                "cortarName": region.get("cortarNm") or region.get("cortarName") or "",
-                "lat": region.get("lat") or region.get("centerLat"),
-                "lon": region.get("lon") or region.get("centerLon"),
-            }
-            for region in regions
-            if region.get("cortarNo") or region.get("CortarNo")
-        ]
+        payload = await self._get_json(
+            "/map/getRegionList", {"cortarNo": cortar_no}, allow_non_json=True
+        )
+        regions = (
+            (payload.get("result") or {}).get("list")
+            or payload.get("regionList")
+            or payload.get("list")
+            or []
+        )
+        normalized = []
+        for region in regions:
+            code = pick(region, "cortarNo", "CortarNo", "cortarNO", "cortar_no")
+            if not code:
+                continue
+            normalized.append(
+                {
+                    "cortarNo": str(code),
+                    "cortarName": str(
+                        pick(region, "cortarNm", "cortarName", "CortarNm", "name", "cortarNMs")
+                        or ""
+                    ),
+                    "lat": pick(region, "lat", "centerLat", "y", "cortarLat"),
+                    "lon": pick(region, "lon", "centerLon", "x", "cortarLon", "lng"),
+                }
+            )
+        return normalized
 
     async def _subregions(self, cortar_no: str) -> list[dict]:
         if cortar_no not in self._region_cache:
@@ -218,6 +240,45 @@ class NaverMobileClient:
                 if region["cortarNo"] == cortar_no and region.get("lat") and region.get("lon"):
                     return float(region["lat"]), float(region["lon"])
         return None
+
+    async def dump_raw(self) -> list[dict[str, object]]:
+        """응답 원문을 그대로 모아 돌려준다(doctor --raw).
+
+        필드명이 바뀌었을 때 무엇을 보고 매핑해야 하는지 알려면 원문이 필요하다.
+        """
+        samples: list[dict[str, object]] = []
+
+        async def capture(label: str, coro) -> None:
+            try:
+                await coro
+            except (NaverLandError, httpx.HTTPError, OSError) as exc:  # 실패해도 원문은 남긴다
+                samples.append({"label": label, "error": f"{type(exc).__name__}: {exc}", **self.last_raw})
+            else:
+                samples.append({"label": label, **self.last_raw})
+
+        await capture("시/도 목록", self._get_json("/map/getRegionList", {"cortarNo": ROOT_CORTAR_NO}, allow_non_json=True))
+        await capture("강남구 하위 동", self._get_json("/map/getRegionList", {"cortarNo": "1168000000"}, allow_non_json=True))
+        await capture(
+            "역삼동 매물",
+            self._get_json(
+                "/cluster/ajax/articleList",
+                {
+                    "cortarNo": "1168010100",
+                    "rletTpCd": "APT",
+                    "tradTpCd": "A1",
+                    "z": 14,
+                    "lat": 37.5,
+                    "lon": 127.03,
+                    "btm": 37.475,
+                    "top": 37.525,
+                    "lft": 127.005,
+                    "rgt": 127.055,
+                    "page": 1,
+                },
+                allow_non_json=True,
+            ),
+        )
+        return samples
 
     async def probe(self) -> dict[str, object]:
         """noti doctor 용 점검(토큰이 필요 없으므로 조회만 확인한다)."""

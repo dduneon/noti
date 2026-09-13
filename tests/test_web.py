@@ -32,7 +32,7 @@ def client(tmp_path, monkeypatch):
     app = create_app(settings)
 
     with TestClient(app) as test_client:
-        async def fake_get_json(path, params):
+        async def fake_get_json(path, params, **kwargs):
             if path == "/map/getRegionList":
                 return {"result": {"list": REGION_TREE.get(str(params["cortarNo"]), [])}}
             return {"body": ARTICLES, "more": False}
