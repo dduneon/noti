@@ -76,6 +76,37 @@ async def _test_notify(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _doctor(args: argparse.Namespace) -> int:
+    """네이버 접속·인증이 어디서 막히는지 점검한다."""
+    settings = Settings()
+    client = NaverLandClient(timeout=settings.request_timeout_seconds)
+    try:
+        result = await client.probe()
+    finally:
+        await client.aclose()
+
+    print("== 토큰 발급 시도 ==")
+    for attempt in result.get("handshake", []):
+        if "error" in attempt:
+            print(f"  {attempt['path']:<12} 오류: {attempt['error']}")
+            continue
+        mark = "토큰 받음" if attempt["got_token"] else "토큰 없음"
+        print(f"  {attempt['path']:<12} {attempt['status']} → {attempt['final_url']}  [{mark}]")
+        print(f"  {'':<12} 쿠키: {', '.join(attempt['cookies']) or '(없음)'}")
+
+    if "token_error" in result:
+        print(f"\n결과: 토큰을 받지 못했습니다.\n  {result['token_error']}")
+        return 1
+
+    print(f"\n토큰: {result['token']}")
+    if "regions_error" in result:
+        print(f"지역 목록 조회 실패: {result['regions_error']}")
+        return 1
+    print(f"지역 목록 조회 성공: {result.get('regions_sample')}")
+    print("\n정상입니다.")
+    return 0
+
+
 def _web(args: argparse.Namespace) -> int:
     """설정 페이지 서버. fastapi/uvicorn 은 선택 의존성이라 여기서 import 한다."""
     try:
@@ -141,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("find-region", help="지역명으로 cortarNo 찾기 (예: 서울 강남구 역삼동)")
     p.add_argument("query", nargs="+", help="상위 지역부터 띄어쓴 이름")
 
+    sub.add_parser("doctor", help="네이버 접속·인증 점검 (문제 생겼을 때 먼저 실행)")
+
     p = sub.add_parser("web", help="브라우저에서 조건을 편집하는 설정 페이지 실행")
     p.add_argument("--host", default="127.0.0.1", help="기본 127.0.0.1 (인증이 없으니 외부 노출 금지)")
     p.add_argument("--port", type=int, default=8765)
@@ -160,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         "test-notify": _test_notify,
         "regions": _regions,
         "find-region": _find_region,
+        "doctor": _doctor,
     }
     return asyncio.run(handlers[args.command](args))
 
