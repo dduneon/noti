@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Self
+from urllib.parse import unquote
 
 import httpx
 
@@ -27,6 +28,16 @@ USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
+# XHR 로 부르는 API 용 헤더. 문서 요청(BROWSER_HEADERS)과 구분해서 보낸다.
+API_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+    "Referer": f"{BASE_URL}/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+}
+
 # 브라우저와 비슷하게 보내야 봇으로 걸러지지 않는다.
 BROWSER_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -38,6 +49,19 @@ BROWSER_HEADERS = {
     "Sec-Fetch-Site": "none",
     "Upgrade-Insecure-Requests": "1",
 }
+
+
+def _auth_candidates(token: str) -> list[str]:
+    """쿠키 값에서 만들 수 있는 Authorization 헤더 후보들(중복 제거)."""
+    decoded = unquote(token).strip()
+    bare = decoded[len("Bearer ") :].strip() if decoded.lower().startswith("bearer ") else decoded
+
+    candidates = [f"Bearer {bare}", decoded, token]
+    seen: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.append(candidate)
+    return seen
 
 
 def _describe(attempt: dict[str, object]) -> str:
@@ -68,6 +92,7 @@ class NaverLandClient:
         self._token: str | None = None
         self._region_cache: dict[str, list[dict]] = {}
         self.last_handshake: list[dict[str, object]] = []  # noti doctor 용 기록
+        self._auth_index = 0  # 어떤 Authorization 표기가 통했는지 기억
 
     async def __aenter__(self) -> Self:
         return self
@@ -113,22 +138,44 @@ class NaverLandClient:
         )
 
     async def _get_json(self, path: str, params: dict[str, str | int]) -> dict:
-        token = await self._ensure_token()
-        headers = {"Authorization": f"Bearer {token}"}
-        response = await self._client.get(f"{BASE_URL}{path}", params=params, headers=headers)
-
-        if response.status_code in (401, 403):
-            logger.info("토큰이 만료된 것 같아 재발급합니다 (status=%s)", response.status_code)
-            token = await self._ensure_token(force=True)
-            response = await self._client.get(
-                f"{BASE_URL}{path}", params=params, headers={"Authorization": f"Bearer {token}"}
-            )
-
+        response = await self._request(path, params)
         response.raise_for_status()
         try:
             return response.json()
         except ValueError as exc:  # HTML 에러 페이지가 오는 경우
             raise NaverLandError(f"{path} 응답을 JSON 으로 파싱하지 못했습니다") from exc
+
+    async def _request(self, path: str, params: dict[str, str | int]) -> httpx.Response:
+        """인증 헤더 표기를 바꿔가며 요청한다.
+
+        REALESTATE 쿠키 값은 환경에 따라 `eyJ...` 이기도 하고 URL 인코딩된
+        `Bearer%20eyJ...` 이기도 하다. 후자를 그대로 `Bearer <값>` 에 넣으면
+        `Bearer Bearer%20eyJ...` 가 되어 401 이 난다. 그래서 통하는 표기를 찾아 기억한다.
+        """
+        url = f"{BASE_URL}{path}"
+        token = await self._ensure_token()
+        refreshed = False
+
+        for round_ in range(2):
+            candidates = _auth_candidates(token)
+            for offset in range(len(candidates)):
+                index = (self._auth_index + offset) % len(candidates)
+                response = await self._client.get(
+                    url, params=params, headers={**API_HEADERS, "Authorization": candidates[index]}
+                )
+                if response.status_code not in (401, 403):
+                    if index != self._auth_index:
+                        logger.info("Authorization 표기를 %d번으로 바꿉니다", index)
+                        self._auth_index = index
+                    return response
+
+            if refreshed:
+                break
+            logger.info("인증 실패(%s) — 토큰을 재발급합니다", response.status_code)
+            token = await self._ensure_token(force=True)
+            refreshed = True
+
+        return response  # 마지막 401/403 응답. 호출부에서 raise_for_status 로 처리
 
     async def fetch_listings(self, target: Target) -> list[Listing]:
         """대상(단지/지역)의 매물을 모아서 반환한다.
@@ -246,11 +293,29 @@ class NaverLandClient:
         if "token" not in result:
             return result
 
+        result["auth_header"] = f"{_auth_candidates(await self._ensure_token())[self._auth_index][:20]}…"
+
         try:
             regions = await self.fetch_regions(ROOT_CORTAR_NO)
             result["regions_sample"] = [r.get("cortarName") for r in regions[:3]]
         except (NaverLandError, httpx.HTTPError) as exc:
             result["regions_error"] = f"{type(exc).__name__}: {exc}"
+
+        # 매물 목록은 인증이 실제로 필요한 엔드포인트라 따로 확인한다(역삼동).
+        try:
+            payload = await self._get_json(
+                "/api/articles",
+                {
+                    "cortarNo": "1168010100",
+                    "realEstateType": "APT",
+                    "tradeType": "",
+                    "page": 1,
+                    "order": "rank",
+                },
+            )
+            result["articles_count"] = len(payload.get("articleList") or [])
+        except (NaverLandError, httpx.HTTPError) as exc:
+            result["articles_error"] = f"{type(exc).__name__}: {exc}"
         return result
 
     async def fetch_regions(self, cortar_no: str) -> list[dict]:
