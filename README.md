@@ -148,6 +148,7 @@ sudo journalctl -u noti -f        # 로그 확인
 git clone https://github.com/dduneon/noti.git && cd noti
 
 cp .env.example .env                          # 텔레그램 토큰/챗ID 입력
+                                              # NOTI_CONFIG_PATH/NOTI_DB_PATH 는 건드리지 말 것
 mkdir -p config
 cp config.example.yaml config/config.yaml     # 조건은 나중에 설정 페이지에서 고쳐도 됨
 chmod 600 .env
@@ -171,6 +172,11 @@ docker compose logs -f noti
 
 > 설정 파일은 **디렉터리째** 마운트합니다(`./config:/config`). 단일 파일을 bind mount 하면
 > 그 경로가 마운트 지점이 되어 설정 페이지의 원자적 저장(rename)이 실패합니다.
+
+> `.env` 의 `NOTI_CONFIG_PATH` / `NOTI_DB_PATH` 는 비워 두세요. `env_file` 은 이미지의 ENV 를
+> 덮어쓰기 때문에, 여기에 `config.yaml` 같은 상대경로가 들어 있으면 컨테이너가 마운트한
+> `/config` 대신 엉뚱한 경로를 봅니다(`FileNotFoundError: 'config.yaml'`).
+> compose 가 두 경로를 다시 못박아 두긴 했지만, 낡은 `.env` 를 쓰고 있다면 지우는 편이 낫습니다.
 
 설정 페이지 접속은 SSH 터널로:
 
